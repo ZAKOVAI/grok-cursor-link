@@ -13,7 +13,7 @@ Your Grok Bot asks "what are you working on in Cursor?" and gets the answer from
 1. **Clone**
 
    ```sh
-   git clone https://github.com/YOUR-USER/grok-cursor-link.git && cd grok-cursor-link
+   git clone https://github.com/ZAKOVAI/grok-cursor.git && cd grok-cursor
    ```
 
 2. **Install**
