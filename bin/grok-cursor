@@ -1,0 +1,1018 @@
+#!/usr/bin/env python3
+"""grok-cursor: read your local Cursor agent chats as compact markdown.
+
+Built for Grok Bot (or any assistant that can run a shell command on your
+Mac) so it can see what you're doing in Cursor without copy-paste.
+
+  grok-cursor latest [--turns N]          active chat: project, status, last N turns
+  grok-cursor list [--limit N]            recent chats recorded by the hooks
+  grok-cursor show <id|prefix|project>    one chat, last N turns
+  grok-cursor transcript [--project X]    fallback: read Cursor's raw agent-transcripts
+  grok-cursor doctor                      check the install
+  grok-cursor targets [--ax]              chats/tabs you can send to
+  grok-cursor send [--to CHAT|--new] [--repo PATH] [--headless|--cdp PORT] [--dry-run] "prompt"
+                                          type a prompt into Cursor and press Return (macOS)
+  grok-cursor ax-dump [--grep RX]         Cursor's accessibility tree (selector tuning)
+  grok-cursor events [--since 30m] [--json]   gate / decision / watch events
+  grok-cursor mode away|present|status    gate mode (the human runs this)
+  grok-cursor decide <id> <nonce> allow|deny [--reason TEXT] [--human]
+                                          one-shot gate decision (nonce-checked)
+  grok-cursor always add|list|rm [CMD]   exact low-risk commands that skip the hold
+  grok-cursor hooks install|status|uninstall [--dry-run]
+                                          gate + recorder entries in hooks.json
+  grok-cursor resume <id> [--dry-run]     CDP fallback: re-prompt a chat after a late allow
+  grok-cursor summary [--since 30m]       per-chat digest; away decisions include the reason
+  grok-cursor watch [run|install|uninstall|status|logs] [--dry-run] [--include-scratch]
+                                          webhook ping when any chat finishes or needs approval
+
+Everything except `send` and `approve` is read-only. `send` acts on your Mac: only run it
+after a human has approved the exact prompt and target. Local only. Python 3 standard library. https://cursor.com/docs/hooks
+"""
+import argparse
+import datetime
+import glob
+import json
+import os
+import re
+import sys
+
+VERSION = "0.3.0"
+TURN_MARKER_RE = re.compile(r"<!-- (?:grok-cursor|gb):turn -->")  # gb: legacy grok-bridge logs
+HOOK_EVENTS = ("sessionStart", "beforeSubmitPrompt", "afterAgentResponse", "stop", "sessionEnd")
+HOOK_NAME = "grok-cursor-hook"
+LEGACY_HOOK_NAMES = ("grok-bridge-hook",)
+
+
+def data_home():
+    return os.environ.get("GROK_CURSOR_HOME") or os.path.join(
+        os.path.expanduser("~"), ".grok-cursor")
+
+
+def cursor_dir():
+    return os.environ.get("CURSOR_HOME") or os.path.join(os.path.expanduser("~"), ".cursor")
+
+
+# --- BEGIN REDACT (keep identical in bin/grok-cursor; tests enforce it) ---
+_SECRET_NAME = r"[A-Za-z0-9_.-]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)[A-Za-z0-9_.-]*"
+_REDACT_RULES = [
+    # PEM private keys (multi-line)
+    (re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
+                re.S), "[REDACTED:private-key]"),
+    # .env / shell style:  FOO_API_KEY=value   export GITHUB_TOKEN="..."
+    (re.compile(r"(?im)^(\s*(?:export\s+)?" + _SECRET_NAME + r"\s*[=:]\s*)(?!\[REDACTED)(\S.*)$"),
+     r"\1[REDACTED]"),
+    # quoted config style:  "api_key": "value"   password = 'value'
+    (re.compile(r"(?i)([\"']?" + _SECRET_NAME + r"[\"']?\s*[:=]\s*)([\"'])(?!\[REDACTED)[^\"'\n]{4,}\2"),
+     r"\1\2[REDACTED]\2"),
+    (re.compile(r"\bsk-[A-Za-z0-9_-]{16,}"), "[REDACTED:sk]"),
+    (re.compile(r"\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}"), "[REDACTED:stripe]"),
+    (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{30,}"), "[REDACTED:github]"),
+    (re.compile(r"\bgithub_pat_[A-Za-z0-9_]{22,}"), "[REDACTED:github]"),
+    (re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"), "[REDACTED:aws]"),
+    (re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}"), "[REDACTED:slack]"),
+    (re.compile(r"\bAIza[0-9A-Za-z_-]{35}"), "[REDACTED:google]"),
+    (re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"), "[REDACTED:jwt]"),
+    (re.compile(r"(?i)\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{16,}"), r"\1 [REDACTED]"),
+    # credentials inside URLs: scheme://user:password@host
+    (re.compile(r"([a-z][a-z0-9+.-]*://[^\s:/@]+:)[^\s@/]+@"), r"\1[REDACTED]@"),
+]
+
+
+def redact(text):
+    if not text or os.environ.get("GROK_CURSOR_REDACT", "1") == "0":
+        return text or ""
+    for pattern, repl in _REDACT_RULES:
+        text = pattern.sub(repl, text)
+    return text
+# --- END REDACT ---
+
+
+# ------------------------------------------------------------------ helpers
+
+def load_json(path, default=None):
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return default
+
+
+def parse_iso(value):
+    try:
+        dt = datetime.datetime.fromisoformat(str(value))
+        if dt.tzinfo is None:
+            dt = dt.astimezone()
+        return dt
+    except Exception:
+        return None
+
+
+def from_mtime(path):
+    try:
+        return datetime.datetime.fromtimestamp(os.path.getmtime(path)).astimezone()
+    except OSError:
+        return None
+
+
+def fmt_time(dt):
+    if dt is None:
+        return "unknown"
+    return dt.astimezone().strftime("%Y-%m-%d %H:%M %Z").strip()
+
+
+def fmt_age(dt):
+    if dt is None:
+        return "unknown"
+    secs = (datetime.datetime.now().astimezone() - dt).total_seconds()
+    if secs < 0:
+        secs = 0
+    if secs < 90:
+        return "%ds ago" % secs
+    if secs < 5400:
+        return "%dm ago" % (secs // 60)
+    if secs < 172800:
+        return "%.1fh ago" % (secs / 3600)
+    return "%dd ago" % (secs // 86400)
+
+
+def clip(text, limit):
+    text = (text or "").strip()
+    if limit and len(text) > limit:
+        return text[:limit].rstrip() + "\n\n[... %d more chars; use --max-chars 0 for full text]" % (
+            len(text) - limit)
+    return text
+
+
+def one_line(text, limit=90):
+    text = re.sub(r"\s+", " ", text or "").strip()
+    return text if len(text) <= limit else text[: limit - 1] + "\u2026"
+
+
+def render(meta, turns, total, max_chars, out=sys.stdout):
+    """Shared output format for every command that prints a chat."""
+    w = out.write
+    w("# Cursor chat \u00b7 %s \u00b7 %s\n\n" % (meta.get("project") or "unknown",
+                                               meta.get("status") or "unknown"))
+    w("- conversation: %s\n" % (meta.get("conversation_id") or "unknown"))
+    roots = meta.get("workspace_roots") or []
+    if roots:
+        w("- workspace: %s\n" % ", ".join(roots))
+    w("- updated: %s (%s)\n" % (fmt_time(meta.get("updated_dt")), fmt_age(meta.get("updated_dt"))))
+    if meta.get("last_event"):
+        w("- last event: %s\n" % meta["last_event"])
+    w("- source: %s\n" % meta.get("source", "unknown"))
+    w("- showing: last %d of %d turns\n" % (len(turns), total))
+    for note in meta.get("notes") or []:
+        w("- note: %s\n" % note)
+    for t in turns:
+        title = "### %s" % t["role"]
+        if t.get("ts"):
+            title += " \u00b7 %s" % t["ts"]
+        w("\n%s\n\n%s\n" % (title, clip(t.get("text"), max_chars) or "_(no text)_"))
+    if not turns:
+        w("\n_(no turns recorded yet)_\n")
+
+
+# --------------------------------------------------------- hook chat files
+
+_TITLE_RE = re.compile(r"^### (\S+) \u00b7 ([^\u00b7\n]+?)(?: \u00b7 (.*))?$")
+
+
+def parse_chat_md(path):
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            content = fh.read()
+    except OSError:
+        return []
+    turns = []
+    for chunk in TURN_MARKER_RE.split(content)[1:]:
+        chunk = chunk.strip("\n")
+        first, _, body = chunk.partition("\n")
+        m = _TITLE_RE.match(first.strip())
+        if not m:
+            continue
+        turns.append({"role": m.group(1), "ts": m.group(2).strip(),
+                      "detail": (m.group(3) or "").strip(), "text": body.strip()})
+    return turns
+
+
+def chat_turns(home, cid, include_events=False):
+    cid = os.path.basename(cid)
+    turns = []
+    for name in (cid + ".1.md", cid + ".md"):          # rotated segment first
+        turns.extend(parse_chat_md(os.path.join(home, "chats", name)))
+    if not include_events:
+        turns = [t for t in turns if t["role"] in ("user", "assistant")]
+    return turns
+
+
+def entry_meta(entry, source):
+    meta = dict(entry)
+    meta["updated_dt"] = parse_iso(entry.get("updated_at"))
+    meta["source"] = source
+    meta["notes"] = []
+    return meta
+
+
+def load_index(home):
+    idx = load_json(os.path.join(home, "index.json"), {}) or {}
+    convs = idx.get("conversations") if isinstance(idx, dict) else None
+    return [c for c in (convs or []) if isinstance(c, dict) and c.get("conversation_id")]
+
+
+# ------------------------------------------------------- raw transcripts
+
+_TS_RE = re.compile(r"<timestamp>.*?</timestamp>", re.S)
+_UQ_RE = re.compile(r"<user_query>\s*(.*?)\s*</user_query>", re.S)
+
+
+def clean_user_text(text):
+    m = _UQ_RE.search(text or "")
+    if m:
+        text = m.group(1)
+    return _TS_RE.sub("", text or "").strip()
+
+
+def find_transcripts(project=None):
+    base = os.path.join(cursor_dir(), "projects")
+    paths = set(glob.glob(os.path.join(base, "*", "agent-transcripts", "*", "*.jsonl")))
+    paths |= set(glob.glob(os.path.join(base, "*", "agent-transcripts", "*.jsonl")))
+    found = []
+    for p in paths:
+        parent = os.path.basename(os.path.dirname(p))
+        stem = os.path.splitext(os.path.basename(p))[0]
+        if parent != "agent-transcripts" and parent != stem:
+            continue  # skip nested files (e.g. subagent logs) we don't understand
+        rel = os.path.relpath(p, base).split(os.sep)
+        slug = rel[0]
+        if project and project.lower() not in slug.lower():
+            continue
+        found.append({"path": p, "slug": slug, "id": stem, "mtime": from_mtime(p)})
+    found.sort(key=lambda t: t["mtime"].timestamp() if t["mtime"] else 0, reverse=True)
+    return found
+
+
+def _content_text(content):
+    if isinstance(content, str):
+        return content, []
+    texts, tools = [], []
+    for item in content or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "text" and isinstance(item.get("text"), str):
+            texts.append(item["text"])
+        elif item.get("type") in ("tool_use", "tool_call") and item.get("name"):
+            tools.append(str(item["name"]))
+    return "\n\n".join(texts), tools
+
+
+def parse_transcript(path):
+    """Cursor agent transcript JSONL (undocumented): one
+    {"role": ..., "message": {"content": [{"type": "text", "text": ...}, ...]}} per line.
+    Consecutive messages from the same role are merged into one turn."""
+    turns = []
+    try:
+        fh = open(path, "r", encoding="utf-8", errors="replace")
+    except OSError:
+        return turns
+    with fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            role = obj.get("role") or (obj.get("message") or {}).get("role")
+            if role not in ("user", "assistant"):
+                continue
+            msg = obj.get("message") if isinstance(obj.get("message"), dict) else obj
+            text, tools = _content_text(msg.get("content"))
+            if role == "user":
+                text = clean_user_text(text)
+            text = text.strip()
+            if not text and not tools:
+                continue
+            if turns and turns[-1]["role"] == role:
+                prev = turns[-1]
+                if text:
+                    prev["text"] = (prev["text"] + "\n\n" + text).strip()
+                prev["tools"].extend(tools)
+            else:
+                turns.append({"role": role, "ts": "", "text": text, "tools": list(tools)})
+    for t in turns:
+        if t["tools"]:
+            uniq = []
+            for name in t["tools"]:
+                if name not in uniq:
+                    uniq.append(name)
+            t["text"] = (t["text"] + "\n\n_tools: %s_" % ", ".join(uniq[:15])).strip()
+        t["text"] = redact(t["text"])
+    return turns
+
+
+# --------------------------------------------------------------- commands
+
+def cmd_latest(args):
+    home = data_home()
+    latest = load_json(os.path.join(home, "latest.json"))
+    if not isinstance(latest, dict) or not latest.get("conversation_id"):
+        sys.stdout.write("_grok-cursor: no hook data yet (hooks not installed, or no chat since "
+                         "install). Falling back to the newest raw Cursor transcript._\n\n")
+        args.project, args.id = None, None
+        return cmd_transcript(args)
+    if args.json:
+        json.dump(latest, sys.stdout, indent=2, ensure_ascii=False)
+        sys.stdout.write("\n")
+        return 0
+    meta = entry_meta(latest, "grok-cursor hooks (%s)" % os.path.join(home, "latest.json"))
+    turns = chat_turns(home, latest["conversation_id"])
+    # Hint if Cursor has written a transcript more recently than our hooks did
+    # (e.g. Cursor CLI chats, hooks disabled, or a different machine profile).
+    newest = find_transcripts()
+    if newest and meta["updated_dt"] and newest[0]["mtime"]:
+        lag = (newest[0]["mtime"] - meta["updated_dt"]).total_seconds()
+        if lag > 120 and newest[0]["id"] != latest["conversation_id"]:
+            meta["notes"].append(
+                "a newer raw transcript exists (%s, %s, %s) that the hooks did not record; "
+                "run `grok-cursor transcript` to read it" % (
+                    newest[0]["slug"], newest[0]["id"], fmt_age(newest[0]["mtime"])))
+    if meta.get("status") == "working":
+        meta["notes"].append("agent still working; the last reply may be incomplete")
+    render(meta, turns[-args.turns:] if args.turns > 0 else turns, len(turns), args.max_chars)
+    return 0
+
+
+def cmd_list(args):
+    home = data_home()
+    convs = load_index(home)[: args.limit]
+    if args.json:
+        json.dump(convs, sys.stdout, indent=2, ensure_ascii=False)
+        sys.stdout.write("\n")
+        return 0
+    if not convs:
+        sys.stdout.write("_grok-cursor: no chats recorded yet. Try `grok-cursor transcript --list`._\n")
+        return 0
+    sys.stdout.write("# Recent Cursor chats (newest first)\n\n")
+    for i, c in enumerate(convs, 1):
+        sys.stdout.write("%d. [%s] %s \u00b7 %s \u00b7 `%s`\n" % (
+            i, c.get("status") or "?", c.get("project") or "unknown",
+            fmt_age(parse_iso(c.get("updated_at"))), c["conversation_id"]))
+        if c.get("last_prompt_preview"):
+            sys.stdout.write("   - last prompt: %s\n" % one_line(c["last_prompt_preview"]))
+    return 0
+
+
+def _resolve(convs, key):
+    key_l = key.lower()
+    for c in convs:
+        if c["conversation_id"] == key:
+            return c
+    pref = [c for c in convs if c["conversation_id"].startswith(key)]
+    if pref:
+        return pref[0]
+    for c in convs:  # newest chat whose project or workspace matches
+        hay = [c.get("project") or ""] + list(c.get("workspace_roots") or [])
+        if any(key_l == h.lower() for h in hay):
+            return c
+    for c in convs:
+        hay = [c.get("project") or ""] + list(c.get("workspace_roots") or [])
+        if any(key_l in h.lower() for h in hay):
+            return c
+    return None
+
+
+def cmd_show(args):
+    home = data_home()
+    entry = _resolve(load_index(home), args.target)
+    if entry is None:
+        sys.stderr.write("grok-cursor: no recorded chat matches %r; trying raw transcripts\n"
+                         % args.target)
+        found = [t for t in find_transcripts() if t["id"].startswith(args.target)]
+        if found:
+            args.id, args.project = found[0]["id"], None
+        else:
+            args.id, args.project = None, args.target
+        return cmd_transcript(args)
+    meta = entry_meta(entry, "grok-cursor hooks (%s)" % entry.get("chat_file", ""))
+    turns = chat_turns(home, entry["conversation_id"], include_events=args.events)
+    render(meta, turns[-args.turns:] if args.turns > 0 else turns, len(turns), args.max_chars)
+    return 0
+
+
+def cmd_transcript(args):
+    found = find_transcripts(getattr(args, "project", None))
+    tid = getattr(args, "id", None)
+    if tid:
+        found = [t for t in found if t["id"].startswith(tid)]
+    if getattr(args, "list", False):
+        if not found:
+            sys.stdout.write("_no Cursor agent transcripts found under %s_\n"
+                             % os.path.join(cursor_dir(), "projects"))
+            return 0
+        sys.stdout.write("# Cursor agent transcripts (newest first)\n\n")
+        for i, t in enumerate(found[: args.limit], 1):
+            sys.stdout.write("%d. %s \u00b7 %s \u00b7 `%s`\n" % (
+                i, t["slug"], fmt_age(t["mtime"]), t["id"]))
+        return 0
+    if not found:
+        sys.stdout.write("_grok-cursor: no Cursor agent transcripts found under %s%s_\n" % (
+            os.path.join(cursor_dir(), "projects"),
+            " matching %r" % args.project if getattr(args, "project", None) else ""))
+        return 1
+    t = found[0]
+    turns = parse_transcript(t["path"])
+    meta = {"project": t["slug"], "status": "unknown (raw transcript)",
+            "conversation_id": t["id"], "updated_dt": t["mtime"],
+            "source": "raw Cursor transcript %s (undocumented format; may lag the live chat)"
+                      % t["path"],
+            "notes": []}
+    entry = _resolve(load_index(data_home()), t["id"]) if t["id"] else None
+    if entry and entry.get("conversation_id") == t["id"]:
+        meta["status"] = entry.get("status") or meta["status"]
+        meta["workspace_roots"] = entry.get("workspace_roots")
+    render(meta, turns[-args.turns:] if args.turns > 0 else turns, len(turns), args.max_chars)
+    return 0
+
+
+def _registered_events(hooks_file):
+    cfg = load_json(hooks_file)
+    found = set()
+    if isinstance(cfg, dict) and isinstance(cfg.get("hooks"), dict):
+        for event, items in cfg["hooks"].items():
+            for item in items if isinstance(items, list) else []:
+                if isinstance(item, dict) and HOOK_NAME in str(item.get("command", "")):
+                    found.add(event)
+    return cfg, found
+
+
+def cmd_doctor(args):
+    home = data_home()
+    hooks_file = os.path.join(cursor_dir(), "hooks.json")
+    hook_bin = os.path.join(home, "bin", HOOK_NAME)
+    ok = True
+    w = sys.stdout.write
+    w("# grok-cursor doctor (v%s)\n\n" % VERSION)
+    w("- python: %s (%s)\n" % (sys.version.split()[0], sys.executable))
+    w("- data dir: %s (%s)\n" % (home, "exists" if os.path.isdir(home) else "missing"))
+    exe = os.path.isfile(hook_bin) and os.access(hook_bin, os.X_OK)
+    ok &= exe
+    w("- hook script: %s (%s)\n" % (hook_bin, "ok" if exe else "MISSING or not executable"))
+    cfg, events = _registered_events(hooks_file)
+    if cfg is None:
+        ok = False
+        w("- hooks.json: %s (missing or invalid JSON)\n" % hooks_file)
+    else:
+        missing = [e for e in HOOK_EVENTS if e not in events]
+        ok &= not missing
+        w("- hooks.json: %s (version %s; registered: %s%s)\n" % (
+            hooks_file, cfg.get("version"), ", ".join(sorted(events)) or "none",
+            "; MISSING: " + ", ".join(missing) if missing else ""))
+    latest = load_json(os.path.join(home, "latest.json"))
+    if isinstance(latest, dict):
+        w("- last activity: %s \u00b7 %s \u00b7 %s\n" % (
+            latest.get("project"), latest.get("last_event"),
+            fmt_age(parse_iso(latest.get("updated_at")))))
+    else:
+        w("- last activity: none recorded yet (send a message in a Cursor agent chat)\n")
+    legacy = set()
+    if isinstance(cfg, dict) and isinstance(cfg.get("hooks"), dict):
+        for event, items in cfg["hooks"].items():
+            for item in items if isinstance(items, list) else []:
+                if isinstance(item, dict) and any(n in str(item.get("command", ""))
+                                                  for n in LEGACY_HOOK_NAMES):
+                    legacy.add(event)
+    if legacy:
+        ok = False
+        w("- old grok-bridge hook entries still registered (%s): re-run ./install.sh to migrate\n"
+          % ", ".join(sorted(legacy)))
+    errs = os.path.join(home, "hook-errors.log")
+    if os.path.exists(errs) and os.path.getsize(errs):
+        w("- hook errors: see %s\n" % errs)
+    ver = _last_version(home)
+    w("- cursor_version: %s%s\n" % (ver or "none seen", _safe_suffix(home)))
+    w("- raw transcripts found: %d\n" % len(find_transcripts()))
+    w("\n%s\n" % ("OK" if ok else "NOT FULLY INSTALLED: run ./install.sh from the repo"))
+    if getattr(args, "send", False):
+        bad = _gc_send().doctor_send(_ctx(), w)
+        w("\nsend: %s\n" % ("READY" if not bad else "%d blocking problem(s) above" % bad))
+        ok = ok and not bad
+    return 0 if ok else 1
+
+
+# ------------------------------------------------------------------ send (hands)
+# The UI automation lives in gc_send.py (next to this file once installed,
+# lib/ in the repo). It is only imported by the commands that need it.
+
+def _lib(name):
+    """Import a sibling module: next to this file once installed, lib/ in the repo."""
+    here = os.path.dirname(os.path.realpath(__file__))
+    for d in (here, os.path.join(here, "..", "lib")):
+        if os.path.isfile(os.path.join(d, name + ".py")) and d not in sys.path:
+            sys.path.insert(0, d)
+    return __import__(name)
+
+def _gc_send():
+    return _lib("gc_send")
+
+
+def _ctx():
+    return {"redact": redact, "one_line": one_line, "data_home": data_home, "cursor_dir": cursor_dir}
+
+
+def cmd_send(args):
+    return _gc_send().cmd_send(args, _ctx())
+
+
+def cmd_targets(args):
+    return _gc_send().cmd_targets(args, _ctx())
+
+
+def cmd_selftest(args):
+    res = _lib("gc_resilience")
+    cfg = load_json(os.path.join(cursor_dir(), "hooks.json"))
+    return res.cmd_selftest(args, dict(_ctx(), registry=cfg, hook_script=_hook_script()))
+
+def cmd_probe(args):
+    return _lib("gc_resilience").cmd_probe(args, _ctx())
+
+def cmd_fix_draft(args):
+    return _lib("gc_resilience").cmd_fix_draft(os.getcwd(), args.version, getattr(args, "report", "") or "", [])
+
+
+def cmd_ax_dump(args):
+    return _gc_send().cmd_ax_dump(args, _ctx())
+
+def cmd_pending(args):
+    return _gc_send().cmd_pending(args, _ctx())
+
+def cmd_approve(args):
+    return _gc_send().cmd_approve(args, _ctx())
+
+
+def cmd_answer(args):
+    return _gc_send().cmd_answer(args, _ctx())
+
+
+def cmd_plan(args):
+    return _gc_send().cmd_plan(args, _ctx())
+
+def cmd_watch(args):
+    _gc_send()
+    import gc_watch
+    return gc_watch.cmd_watch(args, dict(_ctx(), cli=os.path.realpath(__file__)))
+
+
+def cmd_events(args):
+    ev = _lib("gc_events")
+    try:
+        since = ev.parse_since(args.since) if args.since else None
+    except ValueError as exc:
+        sys.stderr.write("grok-cursor: %s\n" % exc)
+        return 2
+    rows = ev.read(since, data_home())
+    if args.json:
+        json.dump(rows, sys.stdout, indent=2, ensure_ascii=False)
+        sys.stdout.write("\n")
+        return 0
+    for r in rows:
+        extra = " ".join("%s=%s" % (k, one_line(str(v), 80)) for k, v in r.items() if k not in ("t", "kind"))
+        sys.stdout.write("%s %s %s\n" % (r.get("t"), r.get("kind"), extra))
+    if not rows:
+        sys.stdout.write("_no events%s_\n" % (" in the last " + args.since if args.since else ""))
+    return 0
+
+MODES = ("present", "away")
+
+def read_mode(home=None):
+    """Gate mode; anything missing or unreadable is 'present' (the human decides everything)."""
+    try:
+        with open(os.path.join(home or data_home(), "mode"), encoding="utf-8") as fh:
+            value = fh.read().strip()
+    except OSError:
+        return "present"
+    return value if value in MODES else "present"
+
+def cmd_mode(args):
+    home = data_home()
+    if args.action == "status":
+        sys.stdout.write("mode: %s%s\n" % (read_mode(home), _safe_suffix(home)))
+        ver = _last_version(home)
+        if ver:
+            sys.stdout.write("cursor_version: %s\n" % ver)
+        return 0
+    # ponytail: nonce-less, the human runs it; self-protection keeps the agent out (Phase A step 4).
+    os.makedirs(home, mode=0o700, exist_ok=True)
+    path = os.path.join(home, "mode")
+    before = read_mode(home)
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(args.action + "\n")
+    os.replace(tmp, path)
+    _lib("gc_events").append("mode", home=home, mode=args.action, previous=before)
+    sys.stdout.write("mode: %s (was %s)\n" % (args.action, before))
+    return 0
+
+def cmd_decide(args):
+    try:
+        _lib("gc_gate").apply_decision(
+            data_home(), args.req_id, args.nonce, args.verdict,
+            reason=args.reason or "", human=args.human)
+    except Exception as exc:
+        # DecisionError, and anything else, exits 2 before a partial write:
+        # apply_decision raises before it replaces the file.
+        name = type(exc).__name__
+        if name != "DecisionError":
+            sys.stderr.write("grok-cursor: %s: %s\n" % (name, exc))
+        else:
+            sys.stderr.write("grok-cursor: %s\n" % exc)
+        return 2
+    sys.stdout.write("decided: %s %s\n" % (args.req_id, args.verdict))
+    return 0
+
+def _hook_script():
+    here = os.path.dirname(os.path.realpath(__file__))
+    for path in (os.path.join(here, "grok-cursor-hook"),
+                 os.path.join(here, "..", "hooks", "grok-cursor-hook")):
+        if os.path.isfile(path):
+            return os.path.realpath(path)
+    return os.path.join(here, "grok-cursor-hook")
+
+def _always_path(home):
+    return os.path.join(home, "always.json")
+
+def _always_load(home):
+    try:
+        with open(_always_path(home), encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return []
+    cmds = data.get("commands") if isinstance(data, dict) else data
+    return [c for c in cmds if isinstance(c, str)] if isinstance(cmds, list) else []
+
+def _always_save(home, cmds):
+    os.makedirs(home, mode=0o700, exist_ok=True)
+    path = _always_path(home)
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump({"commands": cmds}, fh, indent=2, ensure_ascii=False)
+        fh.write("\n")
+    os.replace(tmp, path)
+
+def cmd_always(args):
+    home = data_home()
+    cmds = _always_load(home)
+    if args.action == "list":
+        if not cmds:
+            sys.stdout.write("_no always commands_\n")
+        for cmd in cmds:
+            sys.stdout.write(cmd + "\n")
+        return 0
+    if not args.command:
+        sys.stderr.write("grok-cursor: always %s needs the exact command\n" % args.action)
+        return 2
+    if args.action == "rm":
+        kept = [c for c in cmds if c != args.command]
+        _always_save(home, kept)
+        sys.stdout.write("removed\n" if len(kept) != len(cmds) else "not listed\n")
+        return 0
+    risk, why = _lib("gc_risk").tag(args.command, os.getcwd())
+    if risk != "low":
+        sys.stderr.write("grok-cursor: refusing %r (%s: %s); always is only for low-risk commands\n"
+                         % (args.command, risk, why))
+        return 2
+    if args.command not in cmds:
+        cmds.append(args.command)
+        _always_save(home, cmds)
+    sys.stdout.write("always: %s\n" % args.command)
+    return 0
+
+def _safe_suffix(home):
+    try:
+        return " (safe mode)" if _lib("gc_resilience").safe_on(home) else ""
+    except Exception:
+        return ""
+
+def _last_version(home):
+    try:
+        ver, _safe = _lib("gc_resilience").status_bits(home)
+        if ver:
+            return ver
+    except Exception:
+        pass
+    path = os.path.join(home, "cursor-version")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            ver = fh.read().strip()
+        if ver:
+            return ver
+    except OSError:
+        pass
+    latest = load_json(os.path.join(home, "latest.json")) or {}
+    return latest.get("cursor_version") or ""
+
+def cmd_resume(args):
+    """CDP fallback for an allowed decision the stop hook did not deliver.
+    The agent cannot run this: the gate denies `grok-cursor resume`."""
+    gate = _lib("gc_gate")
+    home = data_home()
+    if not gate._REQ_ID.match(args.req_id or ""):
+        sys.stderr.write("grok-cursor: unknown id\n")
+        return 2
+    try:
+        obj = gate.load_decision(gate.decision_path(home, args.req_id))
+    except (OSError, ValueError):
+        sys.stderr.write("grok-cursor: unknown id\n")
+        return 2
+    if obj.get("decided") != "allow" or obj.get("consumed"):
+        sys.stderr.write("grok-cursor: %s is not an undelivered allow\n" % args.req_id)
+        return 2
+    if obj.get("risk") == "high" and not obj.get("human"):
+        sys.stderr.write("grok-cursor: high risk allow needs --human\n")
+        return 2
+    chat = obj.get("conversation_id") or ""
+    if not chat:
+        sys.stderr.write("grok-cursor: decision has no chat\n")
+        return 2
+    argv = ["send", "--to", chat]
+    if args.dry_run:
+        argv.append("--dry-run")
+    argv.append(gate.resume_message(obj))
+    code = main(argv) or 0
+    if code == 0:
+        gate.deliver(home, args.req_id)
+    return code
+
+def cmd_hooks(args):
+    merge = _lib("merge_hooks")
+    hooks_file = os.path.join(cursor_dir(), "hooks.json")
+    if args.action == "status":
+        cfg = load_json(hooks_file)
+        w = sys.stdout.write
+        if not isinstance(cfg, dict) or not isinstance(cfg.get("hooks"), dict):
+            w("hooks.json: missing or invalid (%s)\n" % hooks_file)
+            return 1
+        n = 0
+        flagged = False
+        gate_names = {event for event, _m in merge.GATE}
+        for event in list(merge.EVENTS) + [e for e, _m in merge.GATE]:
+            items = cfg["hooks"].get(event) or []
+            ours = [i for i in items if isinstance(i, dict) and HOOK_NAME in str(i.get("command", ""))]
+            for item in ours:
+                n += 1
+                bits = ["timeout %s" % item.get("timeout", "?")]
+                if item.get("failClosed"):
+                    bits.append("failClosed")
+                if item.get("matcher"):
+                    bits.append("matcher %s" % item["matcher"])
+                kind = "gate" if event in gate_names else "recorder"
+                w("- %s: %s (%s)\n" % (event, ", ".join(bits), kind))
+                if kind == "gate" and item.get("failClosed") is not True:
+                    w("FLAG: %s missing failClosed\n" % event)
+                    flagged = True
+            if event in gate_names and not ours:
+                w("MISSING gate: %s\n" % event)
+                flagged = True
+        ver = _last_version(data_home())
+        w("- cursor_version: %s%s\n" % (ver or "none seen", _safe_suffix(data_home())))
+        w("%d grok-cursor entries\n" % n)
+        return 1 if flagged else 0
+    argv = [args.action, hooks_file]
+    if args.action == "install":
+        argv.append(_hook_script())
+    if args.dry_run:
+        argv.append("--dry-run")
+    return merge.main(argv)
+
+def cmd_summary(args):
+    ev = _lib("gc_events")
+    try:
+        since = ev.parse_since(args.since) if args.since else None
+    except ValueError as exc:
+        sys.stderr.write("grok-cursor: %s\n" % exc)
+        return 2
+    rows = ev.read(since, data_home())
+    paired = {}
+    for row in rows:
+        req_id = row.get("req_id")
+        if not req_id or row.get("kind") not in ("decision_requested", "decided"):
+            continue
+        paired.setdefault(req_id, {})[row["kind"]] = row
+    chats = {}
+    for req_id, pair in paired.items():
+        req = pair.get("decision_requested") or {}
+        cid = req.get("conversation_id") or "unknown"
+        chats.setdefault(cid, []).append((req_id, req, pair.get("decided")))
+    w = sys.stdout.write
+    w("# summary%s\n" % (" (last %s)" % args.since if args.since else ""))
+    if not chats:
+        w("\n_no decisions_\n")
+        return 0
+    for cid, items in chats.items():
+        w("\n## %s\n" % cid)
+        for req_id, req, decided in items:
+            verdict = (decided or {}).get("verdict") or "pending"
+            mode = req.get("mode") or "?"
+            w("- %s %s %s %s: %s\n" % (req_id, req.get("risk") or "?", mode, verdict,
+                                      one_line(req.get("command") or "", 120)))
+            if mode == "away" or (decided or {}).get("reason"):
+                w("  reason: %s\n" % ((decided or {}).get("reason") or ""))
+    return 0
+
+def build_parser():
+    p = argparse.ArgumentParser(prog="grok-cursor", description=__doc__.split("\n\n")[0])
+    p.add_argument("--version", action="version", version="grok-cursor " + VERSION)
+    sub = p.add_subparsers(dest="cmd")
+
+    def common(sp, turns=6):
+        sp.add_argument("--turns", type=int, default=turns,
+                        help="number of user/assistant turns to show (0 = all, default %d)" % turns)
+        sp.add_argument("--max-chars", type=int, default=4000,
+                        help="truncate each turn to N chars (0 = no limit, default 4000)")
+
+    sp = sub.add_parser("latest", help="the most recently active chat")
+    common(sp)
+    sp.add_argument("--json", action="store_true", help="print latest.json as-is")
+    sp.add_argument("--limit", type=int, default=20, help=argparse.SUPPRESS)
+    sp.set_defaults(func=cmd_latest, list=False)
+
+    sp = sub.add_parser("list", help="recent chats recorded by the hooks")
+    sp.add_argument("--limit", type=int, default=15)
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_list)
+
+    sp = sub.add_parser("show", help="one chat by conversation id, id prefix, or project name")
+    sp.add_argument("target")
+    common(sp)
+    sp.add_argument("--events", action="store_true", help="include session/stop events")
+    sp.add_argument("--limit", type=int, default=20, help=argparse.SUPPRESS)
+    sp.set_defaults(func=cmd_show, list=False)
+
+    sp = sub.add_parser("transcript", help="fallback: read Cursor's raw agent-transcripts JSONL")
+    sp.add_argument("--project", help="substring of the project slug (e.g. my-app)")
+    sp.add_argument("--id", help="transcript/conversation id or prefix")
+    sp.add_argument("--list", action="store_true", help="list transcripts instead")
+    sp.add_argument("--limit", type=int, default=20)
+    common(sp)
+    sp.set_defaults(func=cmd_transcript)
+
+    sp = sub.add_parser("doctor", help="check the install")
+    sp.add_argument("--send", action="store_true", help="also check readiness for `send` (permissions, lock, CLI)")
+    sp.set_defaults(func=cmd_doctor)
+
+    sp = sub.add_parser("send", help="type a prompt into Cursor and press Return (macOS; needs human approval)")
+    sp.add_argument("prompt", help='prompt text, or "-" to read stdin')
+    sp.add_argument("--to", metavar="CHAT", help="switch to this open chat tab first (id, id prefix, title, or a unique workspace name)")
+    sp.add_argument("--new", action="store_true", help="start a new chat first")
+    sp.add_argument("--repo", help="open this folder in Cursor first / pick its window (headless: run there)")
+    sp.add_argument("--method", choices=("auto", "paste", "deeplink"), default="auto",
+                    help="how text gets into the input (default auto: paste, deep link if the clipboard isn't text)")
+    sp.add_argument("--now", action="store_true", help="Cmd+Return (send immediately even if the agent is busy)")
+    sp.add_argument("--back", action="store_true",
+                    help="CDP: after a background-tab send, switch back to the tab that was in view")
+    sp.add_argument("--cdp", type=int, metavar="PORT",
+                    help="drive Cursor over DevTools on 127.0.0.1:PORT (default: 9222 when that port is open)")
+    sp.add_argument("--headless", action="store_true", help="run Cursor CLI `agent -p` instead of the IDE")
+    sp.add_argument("--dry-run", action="store_true", help="run every check and show the plan; send nothing")
+    sp.add_argument("--verify", type=int, default=15, metavar="SEC",
+                    help="seconds to wait for the prompt to show up in hooks/transcripts (0 = skip, default 15)")
+    sp.add_argument("--clobber-clipboard", action="store_true", help="don't save/restore the clipboard")
+    sp.add_argument("--allow-secrets", action="store_true", help="skip the secret scan")
+    sp.add_argument("--max-chars", type=int, default=8000,
+                    help="refuse prompts longer than this (0 = no cap, default 8000)")
+    sp.set_defaults(func=cmd_send)
+
+    sp = sub.add_parser("targets", help="list Cursor chats/tabs you can --to (read-only)")
+    sp.add_argument("--all", action="store_true", help="include closed chats")
+    sp.add_argument("--workspace", help="filter by workspace path substring")
+    sp.add_argument("--ax", action="store_true", help="also list tabs visible on screen (macOS, Accessibility)")
+    sp.add_argument("--limit", type=int, default=30)
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_targets)
+
+    sp = sub.add_parser("pending", help="show the approval card a chat is waiting on (CDP, read-only)")
+    sp.add_argument("--to", metavar="CHAT", required=True, help="chat id, id prefix, title, or a unique workspace name")
+    sp.add_argument("--cdp", type=int, metavar="PORT", help="DevTools port (default 9222)")
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_pending)
+
+    sp = sub.add_parser("approve", help="click Run/Skip/Accept on a chat's approval card (CDP; never 'Always')")
+    sp.add_argument("--to", metavar="CHAT", help="chat id, id prefix, title, or a unique workspace name (default with --match: the decision's chat)")
+    sp.add_argument("--action", choices=("run", "skip", "accept"),
+                    help="button to click; required unless --match, which always clicks Run")
+    sp.add_argument("--match", metavar="REQ_ID",
+                    help="click Run only if this allow is fresh and the one run card's command still matches")
+    sp.add_argument("--expect", metavar="TEXT",
+                    help="refuse unless the card's command/action contains TEXT (guards against a changed card)")
+    sp.add_argument("--back", action="store_true", help="switch back to the tab that was in view afterwards")
+    sp.add_argument("--cdp", type=int, metavar="PORT", help="DevTools port (default 9222)")
+    sp.add_argument("--verify", type=int, default=10, metavar="SEC", help="seconds to wait for the card to go")
+    sp.add_argument("--dry-run", action="store_true", help="find the card and button; click nothing")
+    sp.set_defaults(func=cmd_approve)
+
+    sp = sub.add_parser("answer", help="click a question option by exact label, then Continue (never 'Always')")
+    sp.add_argument("--to", metavar="CHAT", required=True, help="chat id, id prefix, title, or a unique workspace name")
+    sp.add_argument("--option", required=True, help="exact option label")
+    sp.add_argument("--back", action="store_true", help="switch back to the tab that was in view afterwards")
+    sp.add_argument("--cdp", type=int, metavar="PORT", help="DevTools port (default 9222)")
+    sp.add_argument("--verify", type=int, default=10, metavar="SEC", help="seconds to wait for Continue, then for the question to go")
+    sp.add_argument("--dry-run", action="store_true", help="find the option; click nothing")
+    sp.set_defaults(func=cmd_answer)
+
+    sp = sub.add_parser("plan", help="accept clicks Build; reject clicks an exact Reject label, else clicks nothing")
+    sp.add_argument("action", choices=("accept", "reject"))
+    sp.add_argument("--to", metavar="CHAT", required=True, help="chat id, id prefix, title, or a unique workspace name")
+    sp.add_argument("--back", action="store_true", help="switch back to the tab that was in view afterwards")
+    sp.add_argument("--cdp", type=int, metavar="PORT", help="DevTools port (default 9222)")
+    sp.add_argument("--verify", type=int, default=10, metavar="SEC", help="seconds to wait for the plan card to change")
+    sp.add_argument("--dry-run", action="store_true", help="find the button; click nothing")
+    sp.set_defaults(func=cmd_plan)
+
+    sp = sub.add_parser("watch", help="ping a webhook when any chat finishes or needs approval (read-only)")
+    sp.add_argument("action", nargs="?", default="run", choices=("run", "install", "uninstall", "status", "logs"))
+    sp.add_argument("--dry-run", action="store_true", help="print pings instead of POSTing them")
+    sp.add_argument("--include-scratch", action="store_true", help="also watch the gc-scratch-1/2 workspaces")
+    sp.add_argument("--cdp", type=int, metavar="PORT", help="DevTools port for approval cards (default 9222)")
+    sp.add_argument("--once", action="store_true", help=argparse.SUPPRESS)
+    sp.add_argument("--lines", type=int, default=40, help="watch logs: lines to show")
+    sp.set_defaults(func=cmd_watch)
+
+    sp = sub.add_parser("events", help="gate/decision/watch events from ~/.grok-cursor/events.jsonl")
+    sp.add_argument("--since", help="only newer events, e.g. 90s, 30m, 2h, 1d")
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_events)
+
+    sp = sub.add_parser("mode", help="gate mode: present (the human decides) or away (Grok Bot decides medium)")
+    sp.add_argument("action", choices=("away", "present", "status"))
+    sp.set_defaults(func=cmd_mode)
+
+    sp = sub.add_parser("decide", help="one-shot gate decision; exact shape, nonce-checked")
+    sp.add_argument("req_id")
+    sp.add_argument("nonce")
+    sp.add_argument("verdict", choices=("allow", "deny"))
+    sp.add_argument("--reason", default="")
+    sp.add_argument("--human", action="store_true",
+                    help="required to allow a high-risk request; outside the Grok Bot auto rule")
+    sp.set_defaults(func=cmd_decide)
+
+    sp = sub.add_parser("always", help="exact low-risk commands that skip the hold")
+    sp.add_argument("action", choices=("add", "list", "rm"))
+    sp.add_argument("command", nargs="?", help="the exact command text")
+    sp.set_defaults(func=cmd_always)
+
+    sp = sub.add_parser("hooks", help="install, status, or remove grok-cursor hook entries")
+    sp.add_argument("action", choices=("install", "status", "uninstall"))
+    sp.add_argument("--dry-run", action="store_true", help="print the hooks.json that would be written")
+    sp.set_defaults(func=cmd_hooks)
+
+    sp = sub.add_parser("resume", help="CDP fallback: re-prompt a chat with an allowed decision")
+    sp.add_argument("req_id")
+    sp.add_argument("--dry-run", action="store_true")
+    sp.set_defaults(func=cmd_resume)
+
+    sp = sub.add_parser("summary", help="per-chat digest of gate decisions")
+    sp.add_argument("--since", help="only newer events, e.g. 30m, 2h, 1d")
+    sp.set_defaults(func=cmd_summary)
+
+    sp = sub.add_parser("ax-dump", help="print Cursor's accessibility tree (for tuning selectors)")
+    sp.add_argument("--grep", help="only lines matching this regex")
+    sp.add_argument("--limit", type=int, default=20000)
+    sp.set_defaults(func=cmd_ax_dump)
+
+    sp = sub.add_parser("selftest", help="check hooks, gate, CDP, and selectors; clicks nothing")
+    sp.add_argument("--json", action="store_true")
+    sp.add_argument("--cdp", type=int, default=9222)
+    sp.set_defaults(func=cmd_selftest)
+
+    sp = sub.add_parser("probe", help="write a sanitized DOM fixture; clicks nothing")
+    sp.add_argument("--to", required=True)
+    sp.add_argument("--dump", action="store_true")
+    sp.add_argument("--cdp", type=int)
+    sp.set_defaults(func=cmd_probe)
+
+    sp = sub.add_parser("fix-draft", help="branch off send with a breakage note; never commits or merges")
+    sp.add_argument("version")
+    sp.add_argument("--report", default="")
+    sp.set_defaults(func=cmd_fix_draft)
+    return p
+
+
+def main(argv=None):
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if not getattr(args, "func", None):
+        parser.print_help()
+        return 2
+    try:
+        return args.func(args) or 0
+    except BrokenPipeError:
+        return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

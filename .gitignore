@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.DS_Store
+*.bak-*
+.grok-cursor/
+.venv/
+watch.env
+.env
+.env.*
+!watch.env.example
+*.log
+*.xcresult

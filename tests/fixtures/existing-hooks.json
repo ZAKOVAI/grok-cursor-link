@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "x-team-note": "keep me",
+  "hooks": {
+    "afterFileEdit": [{ "command": "./hooks/format.sh" }],
+    "beforeSubmitPrompt": [{ "command": "./hooks/audit.sh" }],
+    "stop": [{ "command": "./audit.sh", "loop_limit": 10 }],
+    "beforeShellExecution": [{ "command": "./approve-network.sh", "timeout": 30, "matcher": "curl|wget|nc" }]
+  }
+}

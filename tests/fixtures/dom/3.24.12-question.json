@@ -1,0 +1,7 @@
+{
+  "version": "3.24.12",
+  "kind": "question",
+  "options": ["a.txt", "b.txt"],
+  "buttons": ["Skip", "Continue"],
+  "status": "completed"
+}

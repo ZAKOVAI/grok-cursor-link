@@ -1,0 +1,24 @@
+{
+  "conversation_id": "00000000-0000-4000-8000-000000000001",
+  "generation_id": "gen-0001",
+  "model": "example-model",
+  "model_id": "example-model",
+  "cursor_version": "1.7.2",
+  "workspace_roots": [
+    "/Users/you/projects/my-app"
+  ],
+  "user_email": "user@example.com",
+  "transcript_path": "/Users/you/.cursor/projects/Users-you-projects-my-app/agent-transcripts/00000000-0000-4000-8000-000000000001/00000000-0000-4000-8000-000000000001.jsonl",
+  "hook_event_name": "beforeSubmitPrompt",
+  "prompt": "Add a dark mode toggle to the settings page. Here is my env:\nSTRIPE_SECRET_KEY={{STRIPE_KEY}}\nand {{GITHUB_TOKEN}}",
+  "attachments": [
+    {
+      "type": "file",
+      "file_path": "/Users/you/projects/my-app/src/settings.tsx"
+    },
+    {
+      "type": "rule",
+      "file_path": "/Users/you/projects/my-app/.cursor/rules/style.mdc"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "source": "probe dump dom-edit-tool.json and dom-edit-bar.json",
+  "data-tool-call-id": "toolu_01LYYozpzYf6vkFGcUck1U3S",
+  "data-tool-status": "completed",
+  "components": ["transcript-card-root"],
+  "buttons": [],
+  "review_bar_buttons": ["Undo", "Review"],
+  "keep_all": false
+}

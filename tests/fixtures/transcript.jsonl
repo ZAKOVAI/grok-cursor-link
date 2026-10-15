@@ -1,0 +1,8 @@
+{"role": "user", "message": {"content": [{"type": "text", "text": "<timestamp>Thursday, Jan 1, 2026, 9:00 AM</timestamp>\n<user_query>\nAdd a dark mode toggle please. token: {{GITHUB_TOKEN}}\n</user_query>"}]}}
+{"role": "assistant", "message": {"content": [{"type": "text", "text": "Reading the settings page first."}, {"type": "tool_use", "name": "Read", "input": {"path": "src/settings.tsx"}}]}}
+{"role": "assistant", "message": {"content": [{"type": "text", "text": "Dark mode toggle added."}]}}
+{"role": "user", "message": {"content": [{"type": "text", "text": "<user_query>Great, now add a keyboard shortcut.</user_query>"}]}}
+"not-a-dict"
+{this is not json
+
+{"role": "assistant", "message": {"content": [{"type": "text", "text": "Shortcut work started."}]}}

@@ -1,0 +1,22 @@
+{
+  "version": "3.24.12",
+  "screen": "gc-scratch-2 question card, Which color?, red/blue",
+  "elements": [
+    {
+      "classes": ["composer-bar"],
+      "attrs": {"data-composer-id": "3ee195b0", "data-composer-status": "completed"}
+    },
+    {"classes": ["composer-questionnaire-toolbar"], "attrs": {}},
+    {"classes": ["composer-questionnaire-toolbar-option"], "attrs": {}},
+    {"classes": ["composer-questionnaire-toolbar-option-label"], "attrs": {}},
+    {"classes": [], "attrs": {"data-click-ready": "true"}},
+    {"classes": ["aislash-editor-input"], "attrs": {}}
+  ],
+  "quiet": [
+    {
+      "classes": ["composer-bar"],
+      "attrs": {"data-composer-id": "3ee195b0", "data-composer-status": "completed"}
+    },
+    {"classes": ["aislash-editor-input"], "attrs": {}}
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "source": "probe dump dom-questionnaire.json and dom-question-card.json",
+  "composer_id": "00000000-0000-4000-8000-0000000000c1",
+  "composer_status": "completed",
+  "toolbar_class": "composer-questionnaire-toolbar",
+  "option_class": "composer-questionnaire-toolbar-option",
+  "label_class": "composer-questionnaire-toolbar-option-label",
+  "options": ["a.txt", "b.txt"],
+  "actions": [
+    {"label": "Skip", "data-click-ready": "true"},
+    {"label": "Continue", "data-click-ready": "false"}
+  ],
+  "tool_call_id_on_card": null
+}

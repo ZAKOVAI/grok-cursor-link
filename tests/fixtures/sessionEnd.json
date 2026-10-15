@@ -1,0 +1,16 @@
+{
+  "conversation_id": "00000000-0000-4000-8000-000000000001",
+  "generation_id": "gen-0001",
+  "cursor_version": "1.7.2",
+  "workspace_roots": [
+    "/Users/you/projects/my-app"
+  ],
+  "user_email": "user@example.com",
+  "transcript_path": "/Users/you/.cursor/projects/Users-you-projects-my-app/agent-transcripts/00000000-0000-4000-8000-000000000001/00000000-0000-4000-8000-000000000001.jsonl",
+  "hook_event_name": "sessionEnd",
+  "session_id": "00000000-0000-4000-8000-000000000001",
+  "reason": "user_close",
+  "duration_ms": 45000,
+  "is_background_agent": false,
+  "final_status": "completed"
+}

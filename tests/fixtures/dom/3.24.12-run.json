@@ -1,0 +1,8 @@
+{
+  "version": "3.24.12",
+  "kind": "run",
+  "composer_id": "c644efb1-0000-4000-8000-0000000000a1",
+  "command": "npm test",
+  "buttons": ["Skip", "Run"],
+  "status": ""
+}

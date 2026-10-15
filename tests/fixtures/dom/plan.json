@@ -1,0 +1,9 @@
+{
+  "source": "probe dump dom-plan-card.json",
+  "data-tool-call-id": "toolu_01Jps2MT5FStYy6x1fwpoQ8c",
+  "data-tool-status": "completed",
+  "components": ["transcript-card-root", "split-button"],
+  "footer": null,
+  "data-click-ready": false,
+  "buttons": ["View Plan", "Build", "Open menu"]
+}
