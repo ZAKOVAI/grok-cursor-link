@@ -103,7 +103,7 @@ python3 "$SRC_DIR/lib/merge_hooks.py" install "$HOOKS_FILE" "$GC_HOME/bin/grok-c
 # dry-run and scratch flags stay.
 LABEL="${GROK_CURSOR_WATCH_LABEL:-com.grok-cursor.watch}"
 DOMAIN="gui/$(id -u)"
-if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+if [ "${GROK_CURSOR_SKIP_WATCH_RESTART:-0}" != 1 ] && launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
   launchctl kickstart -k "$DOMAIN/$LABEL"
   echo "restarted $LABEL"
 fi

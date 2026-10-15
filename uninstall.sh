@@ -1,7 +1,7 @@
 #!/bin/sh
 # uninstall.sh: remove grok-cursor-link.
 #   * removes ONLY grok-cursor entries from ~/.cursor/hooks.json (backup first)
-#   * removes ~/.grok-cursor/bin and ~/.grok-cursor/skills (sends.log is data)
+#   * removes ~/.grok-cursor/bin, skills and docs (sends.log is data)
 #   * keeps recorded chats unless --purge is given
 # Usage: ./uninstall.sh [--purge] [--dry-run]
 set -eu
@@ -53,7 +53,7 @@ if [ -f "$PLIST" ]; then
 fi
 
 if [ -n "$DRY_RUN" ]; then
-  echo "[dry-run] would remove $GC_HOME/bin and $GC_HOME/skills$( [ "$PURGE" = 1 ] && echo " and all data in $GC_HOME")"
+  echo "[dry-run] would remove $GC_HOME/bin, $GC_HOME/skills and $GC_HOME/docs$( [ "$PURGE" = 1 ] && echo " and all data in $GC_HOME")"
   echo "[dry-run] would remove $GC_HOME/known-version and $GC_HOME/safe-mode"
   exit 0
 fi
@@ -61,7 +61,7 @@ fi
 case "$GC_HOME" in
   ""|/|"$HOME"|"$HOME/") echo "grok-cursor: refusing to delete suspicious GC_HOME=$GC_HOME" >&2; exit 1 ;;
 esac
-rm -rf "${GC_HOME:?}/bin" "${GC_HOME:?}/skills"
+rm -rf "${GC_HOME:?}/bin" "${GC_HOME:?}/skills" "${GC_HOME:?}/docs"
 rm -f "${GC_HOME:?}/known-version" "${GC_HOME:?}/safe-mode"
 if [ "$PURGE" = 1 ]; then
   rm -rf "${GC_HOME:?}"

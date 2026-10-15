@@ -41,6 +41,8 @@ Send one message in a Cursor agent chat, then check it with `~/.grok-cursor/bin/
 
    The launchd label defaults to `com.grok-cursor.watch`. Set `GROK_CURSOR_WATCH_LABEL` to change it.
 
+   An undecided approval request is re-posted at most 3 times (after 60 s, 120 s and 300 s, with `"repeat": n`), and stops as soon as it is decided or expires.
+
 ## How it works
 
 ```mermaid

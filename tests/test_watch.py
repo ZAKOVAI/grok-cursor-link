@@ -385,5 +385,121 @@ class Decisions(WatchBase):
             saved = json.load(fh)
         self.assertIn("r1", saved["posted"])
 
+
+class Repings(WatchBase):
+    """Undecided decision_requested: first ping always, then at most 3 re-pings (60/120/300 s)."""
+
+    def setUp(self):
+        super().setUp()
+        import gc_gate
+        self.gate = gc_gate
+        self.now = [1000.0]
+
+    def request(self):
+        obj = self.gate.create_request(self.home, "touch /tmp/x", "/tmp", "medium", "away", "grok", C1, "")
+        return obj["req_id"], obj["_nonce"]
+
+    def make(self):
+        w = self.watcher()
+        w.clock = lambda: self.now[0]
+        return w
+
+    def at(self, w, t):
+        self.now[0] = 1000.0 + t
+        with redirect_stderr(io.StringIO()) as err:
+            w.tick(cdp=False)
+            w.save()
+        return err.getvalue()
+
+    def count(self, rid):
+        return sum(1 for p in self.pings if p.get("req_id") == rid)
+
+    def test_first_ping_then_capped_backoff(self):
+        rid, nonce = self.request()
+        w = self.make()
+        self.at(w, 0)
+        self.assertEqual(self.count(rid), 1)
+        self.assertNotIn("repeat", self.pings[0])
+        self.at(w, 59)
+        self.assertEqual(self.count(rid), 1)
+        self.at(w, 60)
+        self.assertEqual(self.count(rid), 2)
+        self.assertEqual(self.pings[-1]["repeat"], 1)
+        self.assertEqual(self.pings[-1]["nonce"], nonce)
+        self.at(w, 179)
+        self.assertEqual(self.count(rid), 2)
+        self.at(w, 180)
+        self.assertEqual(self.count(rid), 3)
+        self.at(w, 479)
+        self.assertEqual(self.count(rid), 3)
+        log = self.at(w, 480)
+        self.assertEqual(self.count(rid), 4)
+        self.assertIn("cap 3 reached", log)
+        for t in (600, 2000, 5000):
+            self.at(w, t)
+        self.assertEqual(self.count(rid), 4)
+        self.assertNotIn(rid, w.repings)
+
+    def test_new_req_ids_are_never_suppressed(self):
+        w = self.make()
+        rids = []
+        for i in range(5):
+            rid, _ = self.request()
+            rids.append(rid)
+            self.at(w, i * 5)
+        for rid in rids:
+            self.assertGreaterEqual(self.count(rid), 1, rid)
+        self.assertEqual(len(self.pings), 5, "only first pings inside the first 60 s")
+
+    def test_decided_stops_repings(self):
+        rid, nonce = self.request()
+        w = self.make()
+        self.at(w, 0)
+        self.gate.apply_decision(self.home, rid, nonce, "deny", reason="no")
+        log = self.at(w, 60)
+        self.assertEqual(self.count(rid), 1)
+        self.assertIn("stopped: decided", log)
+        self.assertNotIn(rid, w.repings)
+
+    def test_expired_stops_repings(self):
+        rid, _ = self.request()
+        w = self.make()
+        self.at(w, 0)
+        path = self.gate.decision_path(self.home, rid)
+        with open(path, encoding="utf-8") as fh:
+            obj = json.load(fh)
+        obj["created"] = "2000-01-01T00:00:00+00:00"
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(obj, fh)
+        log = self.at(w, 60)
+        self.assertEqual(self.count(rid), 1)
+        self.assertIn("stopped: expired", log)
+
+    def test_gone_request_stops_repings(self):
+        rid, _ = self.request()
+        w = self.make()
+        self.at(w, 0)
+        os.remove(self.gate.decision_path(self.home, rid))
+        self.at(w, 60)
+        self.assertEqual(self.count(rid), 1)
+        self.assertNotIn(rid, w.repings)
+
+    def test_state_survives_restart(self):
+        rid, _ = self.request()
+        w = self.make()
+        self.at(w, 0)
+        self.at(w, 60)
+        self.assertEqual(self.count(rid), 2)
+        w2 = self.make()                    # restart: same home, fresh process
+        self.assertIn(rid, w2.repings)
+        self.at(w2, 61)
+        self.assertEqual(self.count(rid), 2, "no duplicate first ping, no early re-ping after restart")
+        self.at(w2, 180)
+        self.assertEqual(self.count(rid), 3)
+        self.assertEqual(self.pings[-1]["repeat"], 2)
+        with open(os.path.join(self.home, "watch-state.json"), encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh)["repings"][rid]["n"], 2)
+        self.assertEqual(oct(os.stat(os.path.join(self.home, "watch-state.json")).st_mode & 0o777), "0o600")
+
 if __name__ == "__main__":
     unittest.main()

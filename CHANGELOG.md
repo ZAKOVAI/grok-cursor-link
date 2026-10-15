@@ -5,6 +5,8 @@
 - Version tripwire stores known-version and emits cursor_updated.
 - selftest (0 / 40 / 41), probe --dump fixtures, safe mode, fix-draft. No auto-merge.
 - --to resolves a unique workspace name. Installer copies gc_card_events.py and gc_resilience.py.
+- Installer copies docs/PROBES.md to ~/.grok-cursor/docs so the installed gate uses the measured hold (48 s) and stop-hook resume. Before this the installed gate fell back to 60 s with resume off.
+- Watcher re-POSTs an undecided decision_requested at most 3 times (after 60 s, 120 s, 300 s), stops early when it is decided, expired or gone; state persists in watch-state.json. The first ping and new req_ids are never suppressed.
 
 ## v0.3.0 (unreleased): verified hands
 

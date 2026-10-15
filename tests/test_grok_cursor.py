@@ -49,6 +49,7 @@ class Base(unittest.TestCase):
         self.env = {k: v for k, v in os.environ.items()
                     if not k.startswith(("GROK_CURSOR_", "GROK_BRIDGE_", "CURSOR_"))}
         self.env["HOME"] = self.home
+        self.env["GROK_CURSOR_SKIP_WATCH_RESTART"] = "1"   # never restart the real watcher from tests
         self.gc = os.path.join(self.home, ".grok-cursor")
 
     def tearDown(self):
@@ -549,6 +550,13 @@ class InstallUninstall(Base):
             self.assertEqual(json.load(fh), original)
         for f in ("grok-cursor-hook", "grok-cursor", "merge_hooks.py", "uninstall.sh"):
             self.assertTrue(os.access(os.path.join(self.gc, "bin", f), os.R_OK), f)
+        # the installed gate (not the repo copy) must find the timing facts
+        self.assertTrue(os.path.isfile(os.path.join(self.gc, "docs", "PROBES.md")))
+        env = {k: v for k, v in os.environ.items() if k != "GROK_CURSOR_PROBES"}
+        q = subprocess.run([sys.executable, "-c",
+                            "import gc_gate as g; print(g.hold_seconds('/nonexistent'), g.followup_enabled())"],
+                           cwd=os.path.join(self.gc, "bin"), capture_output=True, text=True, env=env)
+        self.assertEqual(q.stdout.split(), ["48.0", "True"], q.stderr)
 
         # second install: no changes, no extra backup
         time.sleep(1.1)

@@ -30,6 +30,10 @@ import gc_send
 from gc_send import SendAbort
 
 LABEL = os.environ.get("GROK_CURSOR_WATCH_LABEL") or "com.grok-cursor.watch"
+# Re-POST an undecided decision_requested at most len(REPING_BACKOFF) times:
+# 60 s after the first ping, then 120 s, then 300 s. Stops early once the
+# request is decided, expired (gate TTL) or gone. State survives restarts.
+REPING_BACKOFF = (60, 120, 300)
 SCRATCH = ("gc-scratch-1", "gc-scratch-2")
 SKIP_ERRORS = ("new_message_submitted",)      # Cursor closing a turn because a new prompt arrived
 MINOR_RX = re.compile(r"^(?:Briefly inform the user about the task result|Perform any necessary follow-up"
@@ -231,6 +235,8 @@ class Watcher(object):
         self.cards = st.get("cards") or {}            # chat_id -> last known card command ("" = unknown)
         self.posted = set(st.get("posted") or [])     # decision req_ids already handed to the webhook
         self.stalls = st.get("stalls") or {}
+        self.repings = st.get("repings") or {}        # req_id -> {"n", "next", "payload"}; payload holds the nonce
+        self.clock = time.time
         self.card_fails = st.get("card_fails") or {"streak": 0, "emitted": False}
         self.was_safe = None
         self.dirty = self.first_run           # persist "we've started" even with no chats yet
@@ -251,7 +257,7 @@ class Watcher(object):
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump({"files": self.offsets, "cards": self.cards, "posted": sorted(self.posted), "stalls": self.stalls,
-                       "card_fails": self.card_fails}, fh)
+                       "repings": self.repings, "card_fails": self.card_fails}, fh)
         os.replace(tmp, self.state_path)
         self.dirty = False
 
@@ -440,13 +446,15 @@ class Watcher(object):
             if not nonce:
                 continue
             chat = str(ev.get("conversation_id") or "")
-            self.emit({"event": "decision_requested", "minor": False,
+            payload = {"event": "decision_requested", "minor": False,
                        "chat_id": chat, "chat": chat, "chat_name": "", "workspace": "",
                        "req_id": req_id, "nonce": nonce, "risk": ev.get("risk") or "",
                        "command": ev.get("command") or "", "mode": ev.get("mode") or "",
                        "decider": ev.get("decider") or "",
                        "reply": 'grok-cursor decide %s %s allow|deny --reason "..."' % (req_id, nonce),
-                       "timestamp": now_iso(), "cdp_down": self.cdp_down})
+                       "timestamp": now_iso(), "cdp_down": self.cdp_down}
+            self.emit(payload)
+            self.repings[req_id] = {"n": 0, "next": self.clock() + REPING_BACKOFF[0], "payload": payload}
             try:
                 os.remove(nonce_path)
             except OSError:
@@ -458,6 +466,48 @@ class Watcher(object):
         for payload, key in zip(posts, ids):
             self.emit(payload)
             self.posted.add(key)
+            self.dirty = True
+
+    def request_status(self, req_id):
+        """'open' while the gate still waits on req_id, else why it is closed."""
+        import gc_gate
+        try:
+            obj = gc_gate.load_decision(gc_gate.decision_path(self.home, req_id))
+        except (OSError, ValueError):
+            return "gone"
+        if obj.get("decided"):
+            return "decided"
+        if not gc_gate._fresh(obj, gc_gate.ttl_seconds(self.home)):
+            return "expired"
+        return "open"
+
+    def scan_repings(self):
+        now = self.clock()
+        for req_id in sorted(self.repings):
+            r = self.repings[req_id]
+            status = self.request_status(req_id)
+            if status != "open":
+                del self.repings[req_id]
+                self.dirty = True
+                log("reping %s stopped: %s" % (req_id, status))
+                continue
+            if now < float(r.get("next") or 0):
+                continue
+            n = int(r.get("n") or 0)
+            if n >= len(REPING_BACKOFF):
+                del self.repings[req_id]
+                self.dirty = True
+                log("reping %s stopped: cap %d reached" % (req_id, len(REPING_BACKOFF)))
+                continue
+            payload = dict(r.get("payload") or {}, repeat=n + 1, timestamp=now_iso())
+            self.emit(payload)
+            log("reping %s %d/%d" % (req_id, n + 1, len(REPING_BACKOFF)))
+            n += 1
+            if n >= len(REPING_BACKOFF):
+                del self.repings[req_id]
+                log("reping %s stopped: cap %d reached" % (req_id, len(REPING_BACKOFF)))
+            else:
+                r.update(n=n, next=now + REPING_BACKOFF[n])
             self.dirty = True
 
     def tick(self, cdp=True):
@@ -474,6 +524,7 @@ class Watcher(object):
         if cdp and cards_on and not self.cdp_down:
             self.scan_stalls(busy or {})
         self.scan_decisions()
+        self.scan_repings()
         self.save()
 
 
