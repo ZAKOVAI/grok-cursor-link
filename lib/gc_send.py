@@ -2157,6 +2157,12 @@ def cmd_send(args, ctx):
                 s.transcript_marks[path] = os.path.getsize(path)
             except OSError:
                 pass
+        if not args.dry_run:
+            try:                        # tells the hook this prompt came from us, not a human typing
+                import gc_gate
+                gc_gate.mark_send(ctx["data_home"](), prompt)
+            except Exception:
+                pass
         if mode == "headless":
             if args.to or args.new:
                 raise SendAbort("target", "--to/--new don't apply to --headless (it always starts a new CLI chat)")

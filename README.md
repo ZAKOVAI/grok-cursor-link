@@ -88,6 +88,22 @@ flowchart LR
   - Single turns are capped at 100k characters.
   - The index keeps the 50 most recent chats.
 
+## Human-typed turns run without holds
+
+The gate only gates work your assistant started. When the latest prompt in a chat was typed by you in Cursor, that chat's commands (medium **and** high risk) run without a hold or ping, in Present and Away mode, until the next prompt. Each one is logged as `human_turn_allow` in `~/.grok-cursor/events.jsonl`.
+
+How it tells: `grok-cursor send` drops `~/.grok-cursor/send-pending.json` just before it submits. The `beforeSubmitPrompt` hook consumes it (within 120 s) and marks that turn `grok`; any other prompt is `human`. The stop-hook resume message (`grok-cursor: decision ...`) also counts as `grok`. A chat with no recorded origin (for example from before this version) stays gated until you type in it.
+
+Still held in a human-typed turn (logged `human_turn_held`, then gated as high):
+- `rm -r` of `/`, `~` or anything outside the workspace (`/tmp` is fine)
+- force-push (`--force`, `-f`, `+ref`), any `git reset --hard`
+- disk format/erase (`diskutil erase*`, `mkfs`, `dd of=/dev/...`)
+- `curl|wget ... | sh` from a host not on a short install allowlist (brew, rustup, astral, bun, deno, pnpm, poetry)
+- reading secret files (`.env`, SSH keys, `.pem`, `.netrc`, AWS credentials, keychain via `security`, `watch.env`)
+- anything touching `permissions.json`
+
+Self-protection (the agent can't read `~/.grok-cursor` or run `grok-cursor decide`, `send`, `mode` ...) applies in every turn.
+
 ## The bot instruction block
 
 Paste this into your Grok Bot's instructions or memory:

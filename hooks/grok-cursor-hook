@@ -486,6 +486,11 @@ def main():
         respond(event)
     if os.environ.get("GROK_CURSOR_DISABLE") == "1":
         return
+    if event == "beforeSubmitPrompt":
+        try:
+            _load_gate().note_prompt(payload, data_home())
+        except Exception as exc:
+            log_error(data_home(), "note_prompt: %s: %r" % (type(exc).__name__, exc))
     try:
         record(event, payload)
     except Exception as exc:  # never let Cursor see a failure

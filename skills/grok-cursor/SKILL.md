@@ -78,6 +78,7 @@ Rules:
 - `cursor_updated`: tell the human Cursor changed version and wait.
 - `degraded`: tell the human, click nothing, and wait until `grok-cursor selftest` exits 0 (safe mode is on until then).
 - Present: relay the event to the human. Run approve or answer only after their yes for that exact card.
+- Turns the human typed in Cursor are not gated (only a short catastrophic list is held), so you get no decision pings for them. Prompts you send with `grok-cursor send` stay gated.
 - `question_needed`: `~/.grok-cursor/bin/grok-cursor answer --to <chat> --option "<exact label>"`
 - `plan_needed` accept: `~/.grok-cursor/bin/grok-cursor plan --to <chat> accept`
 - `chat_stalled`: tell the human. Do not click anything.

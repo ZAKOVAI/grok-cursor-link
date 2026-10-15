@@ -127,3 +127,68 @@ def _not_low(seg):
                 return "option runs code or writes files"
             return ""
     return "not on the low allowlist"
+
+
+# ---------------------------------------------------------------- catastrophic
+# Held even in a turn the human typed. Short on purpose: everything else in a
+# human-typed turn runs without asking.
+SAFE_INSTALL_HOSTS = ("brew.sh", "raw.githubusercontent.com/Homebrew/", "sh.rustup.rs", "astral.sh/",
+                      "bun.sh/", "deno.land/", "get.pnpm.io/", "install.python-poetry.org")
+CATASTROPHIC = [
+    (re.compile(r"\bgit\b" + _SEG + r"\bpush\b" + _SEG + r"(?:--force\b|--force-with-lease\b|\s-[a-zA-Z]*f\b|\s\+\S)"),
+     "force-push"),
+    (re.compile(r"\bgit\b" + _SEG + r"\breset\b" + _SEG + r"--hard"), "git reset --hard"),
+    (re.compile(r"\b(?:mkfs(?:\.\w+)?|newfs\w*|fdisk|gpt)\b"), "disk format"),
+    (re.compile(r"\bdiskutil\b" + _SEG + r"\b(?:erase\w*|partition\w*|zero\w*|reformat|apfs\s+delete\w*)\b", re.I),
+     "disk erase"),
+    (re.compile(r"\bdd\b" + _SEG + r"\bof=/dev/"), "dd to device"),
+    (re.compile(r"\bsecurity\b" + _SEG + r"\b(?:find-(?:generic|internet)-password|dump-keychain|export)\b"),
+     "keychain read"),
+    (re.compile(r"(?:^|[\s/'\"=<>])\.env(?:\.(?!example\b|sample\b|template\b)[\w.-]+)?(?=$|[\s'\";|&)])"),
+     "secret file (.env)"),
+    (re.compile(r"\.ssh/id_|id_rsa\b|id_ed25519\b|\.pem\b|\.p12\b|\.netrc\b|\.aws/credentials|"
+                r"\.grok-cursor/watch\.env|\.npmrc\b|\.pypirc\b"), "secret file"),
+    (re.compile(r"permissions\.json"), "permissions.json"),
+]
+_PIPE_SH = re.compile(r"\b(?:curl|wget)\b([^;&\n|]*)\|\s*(?:sudo\s+)?(?:ba|z|da|k)?sh\b")
+
+
+def catastrophic(command, cwd=""):
+    """Reason string if `command` stays held even in a human-typed turn, else ''."""
+    cmd = str(command or "")
+    for rx, why in CATASTROPHIC:
+        if rx.search(cmd):
+            return why
+    for m in _PIPE_SH.finditer(cmd):
+        if not any(h in m.group(1) for h in SAFE_INSTALL_HOSTS):
+            return "curl | sh from unknown host"
+    for seg in _segments(cmd):
+        why = _rm_catastrophic(seg, cwd)
+        if why:
+            return why
+    return ""
+
+
+def _rm_catastrophic(seg, cwd):
+    idx = [i for i, t in enumerate(seg) if t == "rm" or t.endswith("/rm")]
+    if not idx:
+        return ""
+    args = seg[idx[0] + 1:]
+    flags = [a for a in args if a.startswith("-")]
+    recursive = "--recursive" in flags or any(not f.startswith("--") and re.search("[rR]", f) for f in flags)
+    home = os.path.expanduser("~")
+    root = os.path.realpath(cwd) if cwd else ""
+    for t in (a for a in args if not a.startswith("-") and not re.match(r"^[<>]", a)):
+        raw = t
+        t = re.sub(r"^\$\{?HOME\}?", home, t)
+        t = os.path.expanduser(t)
+        if t.startswith("$") or "*" in raw and raw.strip("/*") in ("", "~", "$HOME"):
+            return "rm of / or ~"
+        path = os.path.normpath(os.path.join(cwd or "/", t))
+        if path in ("/", home) or (recursive and home.startswith(path + "/")):
+            return "rm of / or ~"
+        if path.startswith(TMP_DIRS) or path.startswith("/var/folders/"):
+            continue
+        if recursive and (not root or not (path == root or path.startswith(root + "/"))):
+            return "rm -r outside workspace"
+    return ""

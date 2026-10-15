@@ -393,6 +393,58 @@ def note_version(home, payload):
     except Exception:
         pass
 
+# ---------------------------------------------------------------- prompt origin
+# A turn the human typed in Cursor runs without holds (except gc_risk.catastrophic).
+# `grok-cursor send` drops send-pending.json just before it submits; the next
+# beforeSubmitPrompt within SEND_WINDOW consumes it and marks the turn "grok".
+# Unknown or missing origin stays gated, so mistakes land on the safe side.
+SEND_WINDOW = 120
+HUMAN_TURN_TTL = 6 * 3600
+PENDING_SEND = "send-pending.json"
+
+def mark_send(home, prompt):
+    _atomic(os.path.join(home, PENDING_SEND),
+            {"ts": time.time(), "sha256": hashlib.sha256((prompt or "").encode("utf-8")).hexdigest()[:16]})
+
+def _turn_path(home, cid):
+    return os.path.join(home, "turns", re.sub(r"[^A-Za-z0-9_.-]", "_", cid)[:80] + ".json")
+
+def note_prompt(payload, home, now=None):
+    """beforeSubmitPrompt: record who started this chat's new turn. Returns 'human' or 'grok'."""
+    payload = payload or {}
+    cid = str(payload.get("conversation_id") or payload.get("session_id") or "")
+    if not cid:
+        return ""
+    now = time.time() if now is None else now
+    prompt = str(payload.get("prompt") or "")
+    origin, via = "human", "typed"
+    if prompt.lstrip().startswith("grok-cursor:"):
+        origin, via = "grok", "followup"            # our own stop-hook resume message
+    pending_path = os.path.join(home, PENDING_SEND)
+    try:
+        with open(pending_path, encoding="utf-8") as fh:
+            pending = json.load(fh)
+        age = now - float(pending.get("ts") or 0)
+        if -5 <= age <= SEND_WINDOW:
+            origin, via = "grok", "send"
+        os.remove(pending_path)                     # one marker, one prompt
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    _atomic(_turn_path(home, cid), {"origin": origin, "via": via, "ts": now})
+    _log(home, "prompt_origin", conversation_id=cid, origin=origin, via=via)
+    return origin
+
+def human_turn(home, cid, now=None):
+    if not cid:
+        return False
+    try:
+        with open(_turn_path(home, cid), encoding="utf-8") as fh:
+            turn = json.load(fh)
+    except (OSError, ValueError):
+        return False
+    now = time.time() if now is None else now
+    return turn.get("origin") == "human" and 0 <= now - float(turn.get("ts") or 0) <= HUMAN_TURN_TTL
+
 def handle(event, payload, home):
     """Full-schema permission reply for one gate event. `home` is ~/.grok-cursor."""
     payload = payload or {}
@@ -410,6 +462,13 @@ def handle(event, payload, home):
     cwd = str(payload.get("cwd") or "")
     cid = str(payload.get("conversation_id") or payload.get("session_id") or "")
     risk, _why = gc_risk.tag(cmd, cwd)
+    if risk != "low" and human_turn(home, cid):
+        bad = gc_risk.catastrophic(cmd, cwd)
+        if not bad:
+            _log(home, "human_turn_allow", conversation_id=cid, risk=risk, command=cmd, mode=mode)
+            return allow_reply()
+        _log(home, "human_turn_held", conversation_id=cid, risk=risk, command=cmd, mode=mode, reason=bad)
+        risk = "high"
     try:
         import gc_resilience
         risk = gc_resilience.effective_risk(risk, gc_resilience.safe_on(home), mode)
