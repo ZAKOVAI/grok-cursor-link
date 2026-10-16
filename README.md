@@ -144,6 +144,8 @@ Still held in a human-typed turn (logged `human_turn_held`, then gated as high):
 
 Self-protection (the agent can't read `~/.grok-cursor` or run `grok-cursor decide`, `send`, `mode` ...) applies in every turn.
 
+> **Using Grok Bot?** Skip the paste: import the ready-made [Cursor Link bot](https://x.ai/bot/WNOHrJKWnT4kjoUTa5gPD). Its first chat walks you through the install, the watcher, and keep-awake.
+
 ## The bot instruction block
 
 Paste this into your Grok Bot's instructions or memory:
