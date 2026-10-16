@@ -74,7 +74,12 @@ Rules:
 
 - Away, low risk, or `suggest_always` true: nothing to do.
 - Away, medium: run `~/.grok-cursor/bin/grok-cursor decide <id> <nonce> allow|deny --reason "<why>"`. If a run card is still up, then `~/.grok-cursor/bin/grok-cursor approve --match <id>`.
-- Away, high: tell the human and wait.
+- Away, high: if it is local work inside the repo, covered by a task the human already approved, and git or a
+  scratch container can undo it (e.g. deleting a tracked file, a throwaway local test database), decide it
+  yourself with --human and say why in --reason. Otherwise tell the human and wait. Always ask for: push,
+  deploy, production migrate, spending, reading secrets, deletes git cannot restore.
+- Only interrupt the human for these, or for a real Cursor card/question. The gate pauses the command,
+  so routine holds are yours to answer; do not forward them.
 - `cursor_updated`: tell the human Cursor changed version and wait.
 - `degraded`: tell the human, click nothing, and wait until `grok-cursor selftest` exits 0 (safe mode is on until then).
 - Present: relay the event to the human. Run approve or answer only after their yes for that exact card.

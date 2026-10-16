@@ -185,7 +185,12 @@ On a watcher event:
     ~/.grok-cursor/bin/grok-cursor decide <id> <nonce> allow|deny --reason "<why>"
   If a run card is still up, then
     ~/.grok-cursor/bin/grok-cursor approve --match <id>
-- Away, high: tell me and wait.
+- Away, high: if it is local work inside the repo, covered by a task me already approved, and git or a
+  scratch container can undo it (e.g. deleting a tracked file, a throwaway local test database), decide it
+  yourself with --human and say why in --reason. Otherwise tell me and wait. Always ask for: push,
+  deploy, production migrate, spending, reading secrets, deletes git cannot restore.
+- Only interrupt me for these, or for a real Cursor card/question. The gate pauses the command,
+  so routine holds are yours to answer; do not forward them.
 - Present: relay the event to me. Run approve or answer only after my yes for that exact card.
 - question_needed: ~/.grok-cursor/bin/grok-cursor answer --to <chat> --option "<exact label>"
 - plan_needed accept: ~/.grok-cursor/bin/grok-cursor plan --to <chat> accept
