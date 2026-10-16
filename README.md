@@ -1,20 +1,27 @@
-# grok-cursor
+# grok-cursor-link
 
 [![Release](https://img.shields.io/github/v/release/ZAKOVAI/grok-cursor-link)](https://github.com/ZAKOVAI/grok-cursor-link/releases)
 [![License](https://img.shields.io/github/license/ZAKOVAI/grok-cursor-link)](LICENSE)
 ![macOS](https://img.shields.io/badge/platform-macOS-black?logo=apple)
 
+Check on your Cursor agents from your phone. Your Grok Bot can see what each chat is doing, tell you when one finishes or needs you, send it the next prompt, and keep your Mac awake while it works.
+
+<p align="center">
+  <img src="docs/img/chat-demo.svg" width="420" alt="Animated example: asking the Cursor Link bot to keep the Mac awake until an agent finishes, then approving a push">
+  <br><sub>Example conversation</sub>
+</p>
+
 ## 🚀 Easiest way: use the ready-made Grok Bot
 
-Skip the manual setup. Import the **[Cursor Link bot](https://x.ai/bot/WNOHrJKWnT4kjoUTa5gPD)**. It walks you through everything, or does it for you: install, watcher, approvals, and keep-awake.
+Import the **[Cursor Link bot](https://x.ai/bot/WNOHrJKWnT4kjoUTa5gPD)**. It sets everything up with you: install, watcher, approvals and keep-awake.
 
-**Give your Grok Bot eyes (and, if you want, hands) on your Cursor editor, no copy-paste.**
+Prefer to do it yourself? See [Quick start](#quick-start-60-seconds).
 
-- **Eyes (read-only):** your bot asks "what are you working on in Cursor?" and gets the answer from your Mac.
-- **Hands (opt-in, approval every time):** `grok-cursor send "prompt"` types a prompt into Cursor's chat and presses Enter, so your bot can hand work to your Cursor agent while you're away.
-- Ships as a **CLI**, an **MCP server** (`grok-cursor-mcp`) and an **agent skill** (`skills/grok-cursor/SKILL.md`). Use whichever your assistant speaks.
+## What it does
 
-Your Grok Bot asks "what are you working on in Cursor?" and gets the answer from your Mac in one command. It sees the active chat, the project, whether the agent is still working, and the last few turns. You don't have to export or paste transcripts.
+- **Reads your chats.** Ask "What's my agent doing right now?" and your bot gets the active chat, the project, whether the agent is still working, and the last few replies, straight from your Mac.
+- **Sends prompts, with your OK.** `grok-cursor send "prompt"` types a prompt into a Cursor chat and presses Enter, so your bot can hand off the next task while you're away.
+- **Works with any assistant.** It ships as a **CLI**, an **MCP server** (`grok-cursor-mcp`) and an **agent skill** (`skills/grok-cursor/SKILL.md`).
 
 ## How it works
 
@@ -30,52 +37,45 @@ flowchart LR
 
 ## What you can say to your bot
 
-<p align="center"><img src="docs/img/chat-mockup.svg" width="380" alt="Example Grok Bot chat: keep my Mac awake, and approving a held command"></p>
-
-
-No slash commands. Say it in a normal sentence. Your bot runs the command on your Mac.
+Just talk normally. Your bot runs the right command on your Mac.
 
 ### Keep your Mac awake
 
-- "keep my Mac awake 2h"
-- "keep my Mac awake until 11pm"
-- "add 30 more minutes"
-- "is my Mac awake?"
-- "let it sleep"
-- "auto on" or "auto off"
+- "Keep my Mac awake for two hours"
+- "I'll be right back, keep it on for 30 minutes"
+- "Keep my Mac on until my agent finishes, and let me know when it's done"
+- "Keep it awake until 11pm"
+- "Is my Mac still awake?"
+- "You can let it sleep now"
 
-Auto keeps the Mac awake while any watched chat is generating, and lets it sleep 10 minutes after the last one finishes. A time you asked for wins over auto. This does not need a password or an admin prompt.
+Auto mode keeps your Mac awake while any watched chat is working, and lets it sleep 10 minutes after the last one finishes. A time you ask for wins over auto. No password or admin prompt needed.
 
-### Check on chats
+### Check on your agents
 
-- "check <chat name>"
-- "what is running?"
-- "what is waiting on me?"
+- "What's my agent doing right now?"
+- "Check on my Syftr chat"
+- "Anything waiting on me?"
 
 ### Send work
 
-- "send this to <chat>: ..."
+- "Tell the Syftr chat to run the tests"
 
-The bot shows you the message and which chat it will go to, and sends it after you say yes.
+Your bot shows you the message and which chat it's going to, and sends it once you say yes.
 
 ### Approvals
 
-The bot handles read-only checks and local work you have already approved. Anything risky comes back to you as allow or deny. Say "approve it" or "deny it".
-
-### Shipping
-
-A push, a release, or a deploy happens only after you explicitly say yes.
+Your bot handles read-only checks and local work you've already approved. Anything that pushes, deploys, spends money, touches secrets or deletes something you can't get back comes to you first. Just say "Approve it" or "Deny it".
 
 ### Watcher health
 
-- "is the watcher OK?"
+- "Is the watcher working?"
 
 ## Quick start (60 seconds)
 
 1. **Clone**
 
    ```sh
-   git clone https://github.com/ZAKOVAI/grok-cursor-link.git && cd grok-cursor
+   git clone https://github.com/ZAKOVAI/grok-cursor-link.git && cd grok-cursor-link
    ```
 
 2. **Install**
@@ -105,7 +105,7 @@ Send one message in a Cursor agent chat, then check it with `~/.grok-cursor/bin/
 
    An undecided approval request is re-posted at most 3 times (after 60 s, 120 s and 300 s, with `"repeat": n`), and stops as soon as it is decided or expires.
 
-## How it works
+## Under the hood
 
 ```mermaid
 flowchart LR
