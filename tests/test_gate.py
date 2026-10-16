@@ -206,6 +206,52 @@ class SelfProtection(GateBase):
         self.assertEqual(body["permission"], "deny")
         self.assertIn("waiting for the human", body["user_message"])
 
+class DevRoots(GateBase):
+    """config.json dev_roots: edits inside the project checkout may mention the data dir."""
+    GC_LIT = "~/.grok-cursor"
+    HJ_LIT = "~/.cursor/hooks.json"
+
+    def setUp(self):
+        super().setUp()
+        self.repo = os.path.join(self.home, "src", "grok-cursor")
+        os.makedirs(self.repo)
+        with open(os.path.join(self.gc, "config.json"), "w") as fh:
+            json.dump({"hold": 0.4, "ttl": 1200, "dev_roots": [self.repo]}, fh)
+
+    def tool(self, name, tool_input):
+        return self.hook("preToolUse", {"hook_event_name": "preToolUse", "tool_name": name,
+                                        "tool_input": tool_input, "conversation_id": CID})
+
+    def test_edit_inside_repo_may_mention_protected_paths(self):
+        body = 'ROOT = os.path.expanduser("%s"); HOOKS = "%s"' % (self.GC_LIT, self.HJ_LIT)
+        for name, inp in (("Write", {"path": os.path.join(self.repo, "lib", "gc_gate.py"), "contents": body}),
+                          ("StrReplace", {"path": os.path.join(self.repo, "README.md"), "old_string": "x",
+                                          "new_string": body}),
+                          ("Write", {"path": self.repo + "/../grok-cursor/tests/t.py", "contents": body})):
+            with self.subTest(name=name):
+                self.assertEqual(self.tool(name, inp)["permission"], "allow")
+
+    def test_outside_repo_and_data_dir_still_blocked(self):
+        body = 'x = "%s"' % self.GC_LIT
+        self.assertEqual(self.tool("Write", {"path": "/tmp/elsewhere.py", "contents": body})["permission"], "deny")
+        self.assertEqual(self.tool("Write", {"path": os.path.join(self.gc, "always.json"), "contents": "[]"})["permission"], "deny")
+        self.assertEqual(self.tool("Write", {"path": os.path.join(self.repo, "..", "..", os.path.basename(self.gc), "mode"),
+                                             "contents": "away"})["permission"], "deny")
+        self.assertEqual(self.tool("Write", {"path": os.path.expanduser(self.HJ_LIT), "contents": "{}"})["permission"], "deny")
+
+    def test_shell_and_catastrophic_unchanged(self):
+        self.write_mode("present")
+        self.assertEqual(self.hook("beforeShellExecution", shell("cat %s/mode" % self.GC_LIT))["permission"], "deny")
+        gc_gate.note_prompt({"conversation_id": CID, "prompt": "go"}, self.gc)
+        self.assertEqual(self.hook("beforeShellExecution", shell("git push --force origin main"))["permission"], "deny")
+        self.assertEqual(self.hook("beforeShellExecution", shell("rm -rf ~"))["permission"], "deny")
+
+    def test_no_dev_roots_means_no_exception(self):
+        self.write_config(0.4)
+        body = 'x = "%s"' % self.GC_LIT
+        self.assertEqual(self.tool("Write", {"path": os.path.join(self.repo, "a.py"), "contents": body})["permission"], "deny")
+
+
 class HoldAndDecide(GateBase):
     def test_present_medium_decide_allow(self):
         self.write_mode("present")

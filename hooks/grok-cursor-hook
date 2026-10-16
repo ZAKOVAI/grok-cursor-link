@@ -31,7 +31,7 @@ import sys
 import tempfile
 import time
 
-VERSION = "0.1.0"
+VERSION = "1.0.3"
 
 # Responses Cursor documents for each hook. beforeSubmitPrompt must allow
 # the prompt through; everything else gets an empty object (no-op).

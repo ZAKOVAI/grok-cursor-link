@@ -170,14 +170,53 @@ def _input_mentions(payload):
             pass
     return any(mentions_protected(v) or path_is_protected(v) for v in values)
 
+_PATH_KEYS = ("path", "file_path", "target_file", "filePath", "absolute_path")
+
+def dev_roots(home):
+    """config.json "dev_roots": checkouts of this project. File edits *inside* them may mention the
+    data dir or the hooks file in their content without tripping self-protection. Writes to the data
+    dir itself stay blocked (path_is_protected), and shell commands are not exempt."""
+    roots = load_config(home).get("dev_roots")
+    if not isinstance(roots, list):
+        return []
+    out = []
+    for r in roots:
+        if isinstance(r, str) and r.strip():
+            out.append(os.path.realpath(os.path.expanduser(r.strip())))
+    return out
+
+def _target_paths(payload):
+    raw = payload.get("tool_input")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            raw = {}
+    if not isinstance(raw, dict):
+        return []
+    return [str(raw[k]) for k in _PATH_KEYS if raw.get(k)]
+
+def in_dev_root(payload, home):
+    """True when every target path of a file tool call sits inside a configured dev root."""
+    roots = dev_roots(home)
+    paths = _target_paths(payload)
+    if not roots or not paths:
+        return False
+    for p in paths:
+        real = os.path.realpath(os.path.expanduser(p))
+        if path_is_protected(real) or not any(real == r or real.startswith(r + os.sep) for r in roots):
+            return False
+    return True
+
 def _is_cursor_send(payload):
     if str(payload.get("tool_name") or "") != "cursor_send":
         return False
     hay = " ".join(str(payload.get(k) or "") for k in ("mcp_server_name", "command", "url"))
     return "grok-cursor" in hay or "grok_cursor" in hay
 
-def self_protect(event, payload, mode):
+def self_protect(event, payload, mode, home=None):
     """Reason string, or '' to let the command through. No file reads of the target."""
+    home = home or os.environ.get("GROK_CURSOR_HOME") or os.path.expanduser("~/.grok-cursor")
     if event == "beforeShellExecution":
         cmd = payload.get("command") or ""
         norm = normalize(cmd)
@@ -199,6 +238,8 @@ def self_protect(event, payload, mode):
     if event == "preToolUse":
         if str(payload.get("tool_name") or "") not in FILE_TOOLS:
             return ""
+        if in_dev_root(payload, home):
+            return ""                       # editing this project's own source may name its paths
         if _input_mentions(payload):
             return "protected tool path"
         return ""
@@ -524,7 +565,7 @@ def handle(event, payload, home):
     payload = payload or {}
     note_version(home, payload)
     mode = read_mode(home)
-    reason = self_protect(event, payload, mode)
+    reason = self_protect(event, payload, mode, home)
     if reason:
         _log(home, "blocked", event=event, reason=reason,
              command=payload.get("command") or "", tool=payload.get("tool_name") or "")

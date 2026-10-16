@@ -2266,6 +2266,13 @@ def _read_cards(ws, chat_id, wait):
             return cards
         time.sleep(0.2)
 
+ACTIONABLE = {b for labels in CARD_ACTIONS.values() for b in labels}
+
+def actionable(cards):
+    """Cards `approve` can act on: a live Run/Allow/Skip/Accept button. Finished edit rows and
+    plan cards have none and must not count ("14 approval cards; refusing to guess")."""
+    return [c for c in cards or [] if isinstance(c, dict) and ACTIONABLE & set(c.get("buttons") or [])]
+
 def _card_line(chat, card):
     out = ["chat: %s %r" % (chat["id"][:8], safe_title(chat["title"])),
            "kind: %s  card_id: %s" % (card.get("kind") or "?", card.get("card_id") or ""),
@@ -2378,7 +2385,7 @@ def cmd_approve(args, ctx):
                     raise SendAbort("no_card", "background tab shows no approval card")
                 prev = cdp_select_tab(ws, tab, chat["title"], chat["id"])
                 steps.append("switched to tab: verified")
-            cards = _read_cards(ws, chat["id"], 3 if prev else 0)
+            cards = actionable(_read_cards(ws, chat["id"], 3 if prev else 0))
             if decision is not None and len(cards) != 1:
                 raise SendAbort("card", "%d cards in this chat; need exactly one" % len(cards))
             if not cards:

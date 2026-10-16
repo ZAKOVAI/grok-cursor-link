@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.3 (2026-10-16)
+
+- `approve` counts only cards with a live Run/Allow/Skip/Accept button; finished edit rows and plan cards no longer trigger "N approval cards; refusing to guess".
+- `config.json` `dev_roots`: file edits inside a listed checkout of this project may mention the data dir or the hooks file in their content. Writes into the data dir, the hooks file, shell commands and the catastrophic list are unchanged.
+- VERSION 1.0.3 in the CLI and the hook.
+- Verified on Cursor 3.25.6: doctor OK, selftest exit 0 (hooks, gate, CDP, selectors).
+
 ## v1.0.2 (2026-10-16): durable delivery, never hold a typed turn
 
 - Watcher delivery is durable: every ping is written to `~/.grok-cursor/queue/<event id>.json` before any network call and deleted only after a 2xx. Retries use exponential backoff with jitter (5 s doubling to 300 s). 400/408/425/429, 5xx and network errors are all retryable (the webhook reports its own rate limit as a 400). Same event id = same file, so nothing is duplicated. Nothing is ever dropped. `delivery.json` keeps last success / last error.

@@ -103,6 +103,19 @@ class ProbeFixtures(unittest.TestCase):
         self.assertEqual(len(a), 16)
 
 
+class Actionable(unittest.TestCase):
+    """approve counts only cards with a live Run/Skip/Accept button, not finished edit rows."""
+    def test_finished_edits_and_plans_do_not_count(self):
+        run = {"kind": "run", "buttons": ["Run", "Skip", "Always run"], "command": "npm test"}
+        cards = [{"kind": "edit", "buttons": [], "command": "edited a.py"} for _ in range(13)] + [run]
+        self.assertEqual(gc_send.actionable(cards), [run])
+        self.assertEqual(gc_send.actionable([{"kind": "plan", "buttons": ["View Plan", "Build"]}]), [])
+        self.assertEqual(gc_send.actionable([{"kind": "question", "buttons": ["Skip", "Continue"]}])[0]["kind"], "question")
+        self.assertEqual(gc_send.actionable([{"kind": "edit", "buttons": ["Accept"]}])[0]["kind"], "edit")
+        self.assertEqual(gc_send.actionable([]), [])
+        self.assertEqual(gc_send.actionable([None, "x", {"kind": "run"}]), [])
+
+
 class PendingIdentity(test_send.SendBase):
     def setUp(self):
         super(PendingIdentity, self).setUp()
