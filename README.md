@@ -1,5 +1,9 @@
 # grok-cursor
 
+[![Release](https://img.shields.io/github/v/release/ZAKOVAI/grok-cursor)](https://github.com/ZAKOVAI/grok-cursor/releases)
+[![License](https://img.shields.io/github/license/ZAKOVAI/grok-cursor)](LICENSE)
+![macOS](https://img.shields.io/badge/platform-macOS-black?logo=apple)
+
 **Give your Grok Bot eyes (and, if you want, hands) on your Cursor editor, no copy-paste.**
 
 - **Eyes (read-only):** your bot asks "what are you working on in Cursor?" and gets the answer from your Mac.
@@ -8,7 +12,22 @@
 
 Your Grok Bot asks "what are you working on in Cursor?" and gets the answer from your Mac in one command. It sees the active chat, the project, whether the agent is still working, and the last few turns. You don't have to export or paste transcripts.
 
+## How it works
+
+```mermaid
+flowchart LR
+  A["Cursor chat on your Mac"] -->|hooks record turns| B["grok-cursor\n~/.grok-cursor"]
+  B -->|watcher: done, held, stalled| C["Your Grok Bot"]
+  C -->|plain-English update| D(["You"])
+  D -->|"approve it / send this"| C
+  C -->|decide, send, awake| B
+  B -->|types prompt, clicks card| A
+```
+
 ## What you can say to your bot
+
+<p align="center"><img src="docs/img/chat-mockup.svg" width="380" alt="Example Grok Bot chat: keep my Mac awake, and approving a held command"></p>
+
 
 No slash commands. Say it in a normal sentence. Your bot runs the command on your Mac.
 

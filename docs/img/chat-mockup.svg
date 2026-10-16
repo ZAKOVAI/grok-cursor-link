@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="420" height="430" viewBox="0 0 420 430" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="14">
+  <rect width="420" height="430" rx="28" fill="#0f1115"/>
+  <text x="210" y="38" fill="#9aa0aa" font-size="13" text-anchor="middle">Grok Bot · Cursor Link</text>
+  <line x1="24" y1="54" x2="396" y2="54" stroke="#262a33"/>
+  <rect x="190" y="72" width="206" height="38" rx="19" fill="#3b82f6"/>
+  <text x="293" y="96" fill="#fff" text-anchor="middle">keep my Mac awake 2h</text>
+  <rect x="24" y="124" width="300" height="58" rx="19" fill="#22262e"/>
+  <text x="42" y="148" fill="#e6e8eb">Done. Your Mac stays awake for 2h,</text>
+  <text x="42" y="168" fill="#e6e8eb">no password needed.</text>
+  <rect x="214" y="200" width="182" height="38" rx="19" fill="#3b82f6"/>
+  <text x="305" y="224" fill="#fff" text-anchor="middle">what is waiting on me?</text>
+  <rect x="24" y="252" width="320" height="78" rx="19" fill="#22262e"/>
+  <text x="42" y="276" fill="#e6e8eb">"App Boss" wants to run the test</text>
+  <text x="42" y="296" fill="#e6e8eb">suite. It's local and read-only.</text>
+  <text x="42" y="316" fill="#e6e8eb">Approve it?</text>
+  <rect x="268" y="348" width="128" height="38" rx="19" fill="#3b82f6"/>
+  <text x="332" y="372" fill="#fff" text-anchor="middle">approve it</text>
+  <text x="210" y="412" fill="#6b717c" font-size="12" text-anchor="middle">Example conversation</text>
+</svg>
