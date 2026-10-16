@@ -112,8 +112,14 @@ def post(url, key, payload, tries=3):
             with urllib.request.urlopen(req, timeout=5) as r:
                 return r.status
         except urllib.error.HTTPError as exc:
+            try:
+                body = exc.read(300).decode("utf-8", "replace")
+            except Exception:
+                body = ""
             exc.close()
             if exc.code < 500:
+                if body:   # the webhook's own reason (never our payload or key)
+                    log("webhook %d: %s" % (exc.code, " ".join(body.split())[:200]))
                 return exc.code
         except (urllib.error.URLError, OSError):
             pass

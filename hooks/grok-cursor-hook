@@ -481,6 +481,10 @@ def main():
             reply = _load_gate().stop_reply(payload, data_home()) or {}
         except Exception as exc:
             log_error(data_home(), "stop: %s: %r" % (type(exc).__name__, exc))
+        try:
+            _load_gate().note_turn_end(payload, data_home())
+        except Exception as exc:
+            log_error(data_home(), "note_turn_end: %s: %r" % (type(exc).__name__, exc))
         respond_json(reply)
     else:
         respond(event)

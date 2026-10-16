@@ -2,6 +2,8 @@
 
 ## v1.0.0 (2026-10-16): one repo
 
+- Human-turn allow lasts for the whole running turn the human's prompt started (no time limit until `stop`); the 30 min Away / 6 h Present window only counts after `stop`.
+- Watcher logs the webhook's reason on a 4xx.
 - This repo is the single source of truth (the old private development repo is archived).
 - Watch label: `$GROK_CURSOR_WATCH_LABEL`, then `~/.grok-cursor/watch-label`, then `com.grok-cursor.watch`; install, uninstall and `watch` agree, so a reinstall never starts a second watcher.
 - Audit W2: watch-state.json forgets request ids whose decision and outbox files are gone.

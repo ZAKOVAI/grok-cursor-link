@@ -399,8 +399,10 @@ def note_version(home, payload):
 # beforeSubmitPrompt within SEND_WINDOW consumes it and marks the turn "grok".
 # Unknown or missing origin stays gated, so mistakes land on the safe side.
 SEND_WINDOW = 120
-HUMAN_TURN_TTL = 6 * 3600          # present mode
-HUMAN_TURN_TTL_AWAY = 30 * 60      # away mode: unattended, so a short window
+HUMAN_TURN_TTL = 6 * 3600          # after the turn ended (stop), present mode
+HUMAN_TURN_TTL_AWAY = 30 * 60      # after the turn ended (stop), away mode
+# While the turn a human prompt started is still running (no stop yet) there is no time limit:
+# long test runs must not turn the human's own turn back into a gated one.
 PENDING_SEND = "send-pending.json"
 
 def _prompt_sha(prompt):
@@ -461,6 +463,22 @@ def note_prompt(payload, home, now=None):
     _log(home, "prompt_origin", conversation_id=cid, origin=origin, via=via)
     return origin
 
+def note_turn_end(payload, home, now=None):
+    """stop hook: the running turn is over. The next prompt decides who owns the next turn."""
+    payload = payload or {}
+    cid = str(payload.get("conversation_id") or payload.get("session_id") or "")
+    if not cid:
+        return
+    path = _turn_path(home, cid)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            turn = json.load(fh)
+    except (OSError, ValueError):
+        return
+    if isinstance(turn, dict) and not turn.get("ended"):
+        turn["ended"] = time.time() if now is None else now
+        _atomic(path, turn)
+
 def human_turn(home, cid, now=None, mode="present"):
     if not cid:
         return False
@@ -471,13 +489,20 @@ def human_turn(home, cid, now=None, mode="present"):
         return False
     if not isinstance(turn, dict):
         return False
+    if turn.get("origin") != "human":
+        return False
     now = time.time() if now is None else now
     try:
-        age = now - float(turn.get("ts") or 0)
+        started = float(turn.get("ts") or 0)
+        ended = float(turn["ended"]) if turn.get("ended") else None
     except (TypeError, ValueError):
         return False
+    if now < started:
+        return False
+    if ended is None:
+        return True                                   # the human's turn is still running
     ttl = HUMAN_TURN_TTL_AWAY if mode == "away" else HUMAN_TURN_TTL
-    return turn.get("origin") == "human" and 0 <= age <= ttl
+    return 0 <= now - ended <= ttl
 
 def handle(event, payload, home):
     """Full-schema permission reply for one gate event. `home` is ~/.grok-cursor."""

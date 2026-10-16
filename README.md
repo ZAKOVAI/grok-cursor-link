@@ -90,7 +90,7 @@ flowchart LR
 
 ## Human-typed turns run without holds
 
-The gate only gates work your assistant started. When the latest prompt in a chat was typed by you in Cursor, that chat's commands (medium **and** high risk) run without a hold or ping, until the next prompt. The window is 6 h after your prompt in Present mode and 30 min in Away mode (Away is unattended, so the window is short). Each one is logged as `human_turn_allow` in `~/.grok-cursor/events.jsonl`.
+The gate only gates work your assistant started. When the latest prompt in a chat was typed by you in Cursor, that chat's commands (medium **and** high risk) run without a hold or ping, until the next prompt. There is no time limit while the turn your prompt started is still running (long test runs included). After that turn ends (`stop`), the allow lasts 30 min in Away mode and 6 h in Present mode, and any new prompt decides again. Each one is logged as `human_turn_allow` in `~/.grok-cursor/events.jsonl`.
 
 How it tells: `grok-cursor send` drops `~/.grok-cursor/send-pending.json` just before it submits. The `beforeSubmitPrompt` hook consumes it (within 120 s) and marks that turn `grok`; any other prompt is `human`. The stop-hook resume message (`grok-cursor: decision ...`) also counts as `grok`. A chat with no recorded origin (for example from before this version) stays gated until you type in it.
 

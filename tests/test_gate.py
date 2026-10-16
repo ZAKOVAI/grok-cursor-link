@@ -554,15 +554,35 @@ class HumanTurn(GateBase):
             self.assertEqual(gc_gate.note_prompt({"conversation_id": CID, "prompt": "hi"}, self.gc), "human")
             self.assertFalse(os.path.exists(path))
 
-    def test_away_human_window_is_30_minutes(self):
+    def test_running_human_turn_has_no_time_limit(self):
+        """A long turn (tests running > 30 min) keeps the human's allow until stop."""
         import time as _t
         self.prompt()
         t0 = _t.time()
-        self.assertTrue(gc_gate.human_turn(self.gc, CID, now=t0 + 29 * 60, mode="away"))
-        self.assertFalse(gc_gate.human_turn(self.gc, CID, now=t0 + 31 * 60, mode="away"))
-        self.assertTrue(gc_gate.human_turn(self.gc, CID, now=t0 + 31 * 60, mode="present"))
-        self.assertTrue(gc_gate.human_turn(self.gc, CID, now=t0 + 5 * 3600, mode="present"))
-        self.assertFalse(gc_gate.human_turn(self.gc, CID, now=t0 + 7 * 3600, mode="present"))
+        for mode in ("away", "present"):
+            self.assertTrue(gc_gate.human_turn(self.gc, CID, now=t0 + 45 * 60, mode=mode))
+            self.assertTrue(gc_gate.human_turn(self.gc, CID, now=t0 + 9 * 3600, mode=mode))
+
+    def test_long_turn_medium_allowed_in_away(self):
+        import time as _t
+        self.write_mode("away")
+        gc_gate.note_prompt({"conversation_id": CID, "prompt": "run the suite and commit"}, self.gc,
+                            now=_t.time() - 50 * 60)      # human prompt 50 min ago, turn still running
+        body = self.hook("beforeShellExecution", shell(self.MEDIUM))
+        self.assertEqual(body["permission"], "allow", body)
+        self.assertEqual(self.hook("beforeShellExecution", shell("git push --force origin main"))["permission"], "deny")
+
+    def test_after_stop_window_is_30_min_away_6h_present(self):
+        import time as _t
+        self.prompt()
+        t1 = _t.time()
+        gc_gate.note_turn_end({"conversation_id": CID}, self.gc, now=t1)
+        self.assertTrue(gc_gate.human_turn(self.gc, CID, now=t1 + 29 * 60, mode="away"))
+        self.assertFalse(gc_gate.human_turn(self.gc, CID, now=t1 + 31 * 60, mode="away"))
+        self.assertTrue(gc_gate.human_turn(self.gc, CID, now=t1 + 5 * 3600, mode="present"))
+        self.assertFalse(gc_gate.human_turn(self.gc, CID, now=t1 + 7 * 3600, mode="present"))
+        self.prompt("next")                          # a new human prompt starts a fresh, open turn
+        self.assertTrue(gc_gate.human_turn(self.gc, CID, now=t1 + 10 * 3600, mode="away"))
 
     def test_cloud_destroy_held_even_when_human_typed(self):
         self.write_mode("present")
