@@ -2194,6 +2194,12 @@ def cmd_send(args, ctx):
             result = "delivered"
     except SendAbort as exc:
         s.restore_clipboard()
+        if not args.dry_run:
+            try:
+                import gc_gate
+                gc_gate.unmark_send(ctx["data_home"]())
+            except Exception:
+                pass
         code = exc.code
         result = {"unverified": "unverified", "failed": "failed"}.get(exc.key, "abort")
         entry["reason"] = exc.key

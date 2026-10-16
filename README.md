@@ -90,7 +90,7 @@ flowchart LR
 
 ## Human-typed turns run without holds
 
-The gate only gates work your assistant started. When the latest prompt in a chat was typed by you in Cursor, that chat's commands (medium **and** high risk) run without a hold or ping, in Present and Away mode, until the next prompt. Each one is logged as `human_turn_allow` in `~/.grok-cursor/events.jsonl`.
+The gate only gates work your assistant started. When the latest prompt in a chat was typed by you in Cursor, that chat's commands (medium **and** high risk) run without a hold or ping, until the next prompt. The window is 6 h after your prompt in Present mode and 30 min in Away mode (Away is unattended, so the window is short). Each one is logged as `human_turn_allow` in `~/.grok-cursor/events.jsonl`.
 
 How it tells: `grok-cursor send` drops `~/.grok-cursor/send-pending.json` just before it submits. The `beforeSubmitPrompt` hook consumes it (within 120 s) and marks that turn `grok`; any other prompt is `human`. The stop-hook resume message (`grok-cursor: decision ...`) also counts as `grok`. A chat with no recorded origin (for example from before this version) stays gated until you type in it.
 
@@ -101,6 +101,7 @@ Still held in a human-typed turn (logged `human_turn_held`, then gated as high):
 - `curl|wget ... | sh` from a host not on a short install allowlist (brew, rustup, astral, bun, deno, pnpm, poetry)
 - reading secret files (`.env`, SSH keys, `.pem`, `.netrc`, AWS credentials, keychain via `security`, `watch.env`)
 - anything touching `permissions.json`
+- cloud/data destroy: `gh repo delete`, `terraform destroy`, `pulumi destroy`, `supabase db reset`, `railway down/delete`, `vercel remove/rm`, `fly apps destroy`, `aws s3 rb`, `dropdb`, `DROP DATABASE/TABLE`
 
 Self-protection (the agent can't read `~/.grok-cursor` or run `grok-cursor decide`, `send`, `mode` ...) applies in every turn.
 

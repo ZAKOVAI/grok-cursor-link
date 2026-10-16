@@ -467,6 +467,9 @@ class Watcher(object):
             self.emit(payload)
             self.posted.add(key)
             self.dirty = True
+            if not gc_resilience.safe_on(self.home):      # stale selectors until `selftest` says otherwise
+                gc_resilience.set_safe(self.home, True)
+                log("cursor updated (%s): safe mode on until selftest passes" % payload.get("snippet", ""))
 
     def request_status(self, req_id):
         """'open' while the gate still waits on req_id, else why it is closed."""
@@ -605,9 +608,20 @@ def install(args, ctx):
     return status(args, ctx)
 
 
+def plist_home(path):
+    try:
+        with open(path, "rb") as fh:
+            return (plistlib.load(fh).get("EnvironmentVariables") or {}).get("GROK_CURSOR_HOME") or ""
+    except (OSError, ValueError, plistlib.InvalidFileException):
+        return ""
+
 def uninstall(args, ctx):
-    launchctl("bootout", "%s/%s" % (domain(), LABEL))
     path = plist_path()
+    owner = plist_home(path) if os.path.exists(path) else ""
+    if owner and os.path.realpath(owner) != os.path.realpath(ctx["data_home"]()):
+        print("watch agent %s belongs to %s; left alone" % (path, owner))
+        return 0
+    launchctl("bootout", "%s/%s" % (domain(), LABEL))
     if os.path.exists(path):
         os.remove(path)
     print("removed %s" % LABEL)

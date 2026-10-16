@@ -41,9 +41,14 @@ else
 fi
 
 LABEL="${GROK_CURSOR_WATCH_LABEL:-com.grok-cursor.watch}"
-PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+PLIST="${GROK_CURSOR_LAUNCH_AGENTS:-$HOME/Library/LaunchAgents}/$LABEL.plist"
+# Only the job that points at this GC_HOME. Running uninstall against a temp
+# GROK_CURSOR_HOME (tests, audits) must leave the real watcher alone.
 if [ -f "$PLIST" ]; then
-  if [ -n "$DRY_RUN" ]; then
+  PLIST_HOME=$(plutil -extract EnvironmentVariables.GROK_CURSOR_HOME raw -o - "$PLIST" 2>/dev/null || true)
+  if [ "$PLIST_HOME" != "$GC_HOME" ]; then
+    echo "note: watch agent $PLIST belongs to ${PLIST_HOME:-another home}; left alone"
+  elif [ -n "$DRY_RUN" ]; then
     echo "[dry-run] would stop the watch agent and remove $PLIST"
   else
     launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true

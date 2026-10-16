@@ -7,6 +7,7 @@
 - --to resolves a unique workspace name. Installer copies gc_card_events.py and gc_resilience.py.
 - Installer copies docs/PROBES.md to ~/.grok-cursor/docs so the installed gate uses the measured hold (48 s) and stop-hook resume. Before this the installed gate fell back to 60 s with resume off.
 - Human-typed turns: commands in a chat whose latest prompt the human typed are allowed without a hold (medium and high, both modes), except a short catastrophic list (gc_risk.catastrophic). grok-cursor send marks its prompts via send-pending.json. Events human_turn_allow / human_turn_held / prompt_origin.
+- Human-turn window: 30 min in Away mode (6 h in Present). Cloud/data-destroy commands (gh repo delete, terraform/pulumi destroy, supabase db reset, railway down/delete, vercel remove, dropdb, DROP DATABASE/TABLE, ...) are high and on the catastrophic list.
 - Watcher re-POSTs an undecided decision_requested at most 3 times (after 60 s, 120 s, 300 s), stops early when it is decided, expired or gone; state persists in watch-state.json. The first ping and new req_ids are never suppressed.
 
 ## v0.3.0 (unreleased): verified hands

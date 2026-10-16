@@ -536,6 +536,58 @@ class HumanTurn(GateBase):
         self.prompt(cid="00000000-0000-4000-8000-0000000000bb")
         self.assertEqual(self.hook("beforeShellExecution", shell(self.MEDIUM))["permission"], "deny")
 
+    def test_marker_is_bound_to_its_prompt(self):
+        """A human typing in another chat while a send is in flight must not steal the marker (audit G1)."""
+        gc_gate.mark_send(self.gc, "deploy please")
+        path = os.path.join(self.gc, gc_gate.PENDING_SEND)
+        self.assertEqual(gc_gate.note_prompt({"conversation_id": "B", "prompt": "fix typo"}, self.gc), "human")
+        self.assertTrue(os.path.exists(path), "marker left for its owner")
+        self.assertEqual(gc_gate.note_prompt({"conversation_id": "A", "prompt": "deploy please"}, self.gc), "grok")
+        self.assertFalse(os.path.exists(path))
+
+    def test_broken_marker_is_removed(self):
+        """Corrupt, wrong-shape or directory markers never stick (audit G2)."""
+        path = os.path.join(self.gc, gc_gate.PENDING_SEND)
+        for make in (lambda: open(path, "w").write("{"), lambda: open(path, "w").write("[1]"),
+                     lambda: open(path, "w").write('{"ts": "x"}'), lambda: os.makedirs(path)):
+            make()
+            self.assertEqual(gc_gate.note_prompt({"conversation_id": CID, "prompt": "hi"}, self.gc), "human")
+            self.assertFalse(os.path.exists(path))
+
+    def test_away_human_window_is_30_minutes(self):
+        import time as _t
+        self.prompt()
+        t0 = _t.time()
+        self.assertTrue(gc_gate.human_turn(self.gc, CID, now=t0 + 29 * 60, mode="away"))
+        self.assertFalse(gc_gate.human_turn(self.gc, CID, now=t0 + 31 * 60, mode="away"))
+        self.assertTrue(gc_gate.human_turn(self.gc, CID, now=t0 + 31 * 60, mode="present"))
+        self.assertTrue(gc_gate.human_turn(self.gc, CID, now=t0 + 5 * 3600, mode="present"))
+        self.assertFalse(gc_gate.human_turn(self.gc, CID, now=t0 + 7 * 3600, mode="present"))
+
+    def test_cloud_destroy_held_even_when_human_typed(self):
+        self.write_mode("present")
+        for cmd in ("gh repo delete me/x --yes", "terraform destroy -auto-approve", "supabase db reset --linked",
+                    "railway down", "vercel remove my-app --yes", "psql -c 'DROP DATABASE prod'"):
+            with self.subTest(cmd=cmd):
+                shutil.rmtree(os.path.join(self.gc, "decisions"), ignore_errors=True)
+                self.prompt()
+                self.assertEqual(self.hook("beforeShellExecution", shell(cmd))["permission"], "deny")
+
+    def test_wrapped_resume_message_is_not_human(self):
+        wrapped = "<timestamp>t</timestamp>\n<user_query>\ngrok-cursor: decision ab allowed; re-run: ls\n</user_query>"
+        self.assertEqual(gc_gate.note_prompt({"conversation_id": CID, "prompt": wrapped}, self.gc), "grok")
+
+    def test_bad_turn_file_is_not_human(self):
+        for body in ("{", "[1]", '{"origin": "human", "ts": "x"}'):
+            os.makedirs(os.path.join(self.gc, "turns"), exist_ok=True)
+            with open(gc_gate._turn_path(self.gc, CID), "w") as fh:
+                fh.write(body)
+            self.assertFalse(gc_gate.human_turn(self.gc, CID))
+
+    def test_turn_paths_do_not_collide(self):
+        self.assertNotEqual(gc_gate._turn_path(self.gc, "a/b"), gc_gate._turn_path(self.gc, "a_b"))
+        self.assertNotEqual(gc_gate._turn_path(self.gc, "x" * 100 + "1"), gc_gate._turn_path(self.gc, "x" * 100 + "2"))
+
     def test_stale_marker_does_not_capture_human_prompt(self):
         gc_gate.mark_send(self.gc, "old")
         path = os.path.join(self.gc, gc_gate.PENDING_SEND)
