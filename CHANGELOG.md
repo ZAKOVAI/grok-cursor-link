@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.0.4 (2026-10-16)
+
+- `~/.cursor` is read-only: reads (beforeReadFile, Read/Grep/Glob/ListDir) under it are allowed, but Write/Delete and the hooks config file stay blocked. The data dir stays fully protected.
+
 ## v1.0.3 (2026-10-16)
 
 - `approve` counts only cards with a live Run/Allow/Skip/Accept button; finished edit rows and plan cards no longer trigger "N approval cards; refusing to guess".

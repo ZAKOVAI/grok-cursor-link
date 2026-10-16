@@ -252,6 +252,36 @@ class DevRoots(GateBase):
         self.assertEqual(self.tool("Write", {"path": os.path.join(self.repo, "a.py"), "contents": body})["permission"], "deny")
 
 
+class CursorDirReadOnly(GateBase):
+    """~/.cursor is readable; writes and the hooks config file stay blocked (v1.0.4)."""
+    HOOKS = "~/.cursor/hooks.json"
+    DATA = "~/.grok-cursor"
+
+    def tool(self, name, tool_input):
+        return self.hook("preToolUse", {"hook_event_name": "preToolUse", "tool_name": name,
+                                        "tool_input": tool_input, "conversation_id": CID})
+
+    def test_reads_under_cursor_dir_allowed(self):
+        for path in ("~/.cursor/argv.json", "~/.cursor/mcp.json", "~/.cursor/projects/x/state.json"):
+            with self.subTest(path=path):
+                self.assertEqual(self.hook("beforeReadFile", {"file_path": path, "conversation_id": CID})["permission"], "allow")
+                self.assertEqual(self.tool("Read", {"file_path": path})["permission"], "allow")
+        self.assertEqual(self.tool("Grep", {"path": "~/.cursor", "pattern": "x"})["permission"], "allow")
+        self.assertEqual(self.tool("Glob", {"target_directory": "~/.cursor"})["permission"], "allow")
+
+    def test_hooks_file_and_writes_still_blocked(self):
+        self.assertEqual(self.hook("beforeReadFile", {"file_path": self.HOOKS, "conversation_id": CID})["permission"], "deny")
+        self.assertEqual(self.tool("Read", {"file_path": self.HOOKS})["permission"], "deny")
+        for name in ("Write", "Delete"):
+            with self.subTest(name=name):
+                self.assertEqual(self.tool(name, {"file_path": "~/.cursor/argv.json"})["permission"], "deny")
+        self.assertEqual(self.tool("Write", {"path": "~/.cursor/mcp.json", "contents": "{}"})["permission"], "deny")
+
+    def test_data_dir_still_fully_blocked(self):
+        self.assertEqual(self.hook("beforeReadFile", {"file_path": self.DATA + "/mode", "conversation_id": CID})["permission"], "deny")
+        self.assertEqual(self.tool("Read", {"file_path": self.DATA + "/events.jsonl"})["permission"], "deny")
+
+
 class HoldAndDecide(GateBase):
     def test_present_medium_decide_allow(self):
         self.write_mode("present")

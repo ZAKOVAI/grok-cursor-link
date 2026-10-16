@@ -142,6 +142,21 @@ def _strings(value):
         for v in value:
             yield from _strings(v)
 
+def cursor_dir_path(path):
+    """(inside, is_hooks). inside = path is ~/.cursor or under it. is_hooks = the hooks config file.
+    Reads under ~/.cursor are allowed (read-only); writes and the hooks file are not."""
+    raw = str(path or "")
+    if not raw:
+        return False, False
+    expanded = os.path.expanduser(raw)
+    if not os.path.isabs(expanded):
+        expanded = os.path.abspath(expanded)
+    expanded = os.path.normpath(expanded)
+    hooks = os.path.normpath(os.path.expanduser("~/.cursor/hooks.json"))
+    root = os.path.dirname(hooks)
+    inside = expanded == root or expanded.startswith(root + os.sep)
+    return inside, expanded == hooks
+
 def path_is_protected(path):
     """~/.grok-cursor/** or ~/.cursor/hooks.json, after ~ expansion."""
     raw = str(path or "")
@@ -151,8 +166,8 @@ def path_is_protected(path):
     if not os.path.isabs(expanded):
         expanded = os.path.abspath(expanded)
     expanded = os.path.normpath(expanded)
-    hooks = os.path.normpath(os.path.expanduser("~/.cursor/hooks.json"))
-    if expanded == hooks:
+    _inside, is_hooks = cursor_dir_path(expanded)
+    if is_hooks:
         return True
     roots = [os.path.normpath(os.path.expanduser("~/.grok-cursor"))]
     extra = os.environ.get("GROK_CURSOR_HOME")
@@ -214,6 +229,21 @@ def _is_cursor_send(payload):
     hay = " ".join(str(payload.get(k) or "") for k in ("mcp_server_name", "command", "url"))
     return "grok-cursor" in hay or "grok_cursor" in hay
 
+READ_ONLY_TOOLS = ("Read", "Grep", "Glob", "ListDir")
+
+def _cursor_read_only(payload):
+    """True when a read-only tool targets only ~/.cursor, and never the hooks config file."""
+    paths = _target_paths(payload)
+    if not paths:
+        return False
+    saw = False
+    for pth in paths:
+        inside, is_hooks = cursor_dir_path(pth)
+        if is_hooks or path_is_protected(pth):
+            return False
+        saw = saw or inside
+    return saw
+
 def self_protect(event, payload, mode, home=None):
     """Reason string, or '' to let the command through. No file reads of the target."""
     home = home or os.environ.get("GROK_CURSOR_HOME") or os.path.expanduser("~/.grok-cursor")
@@ -240,6 +270,10 @@ def self_protect(event, payload, mode, home=None):
             return ""
         if in_dev_root(payload, home):
             return ""                       # editing this project's own source may name its paths
+        if str(payload.get("tool_name") or "") in READ_ONLY_TOOLS and _cursor_read_only(payload):
+            return ""                       # ~/.cursor is readable; the hooks file stays blocked
+        if any(cursor_dir_path(pth)[0] for pth in _target_paths(payload)):
+            return "cursor dir write"       # ~/.cursor is read-only: no Write/Delete under it
         if _input_mentions(payload):
             return "protected tool path"
         return ""
