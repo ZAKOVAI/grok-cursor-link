@@ -26,6 +26,7 @@ import urllib.request
 
 import gc_card_events
 import gc_events
+import gc_outbox
 import gc_send
 from gc_send import SendAbort
 
@@ -265,6 +266,8 @@ class Watcher(object):
         self.card_fails = st.get("card_fails") or {"streak": 0, "emitted": False}
         self.was_safe = None
         self.dirty = self.first_run           # persist "we've started" even with no chats yet
+        self.outbox = gc_outbox.Outbox(self.home, clock=lambda: self.clock(), log=log)
+        self.flush_lock = threading.Lock()
 
     def _load(self):
         try:
@@ -451,15 +454,29 @@ class Watcher(object):
             sys.stdout.flush()
             log("dry-run " + line)
             return
-        url, key = load_env(self.home)
+        # Durable: on disk first, deleted only after a 2xx. flush() retries with backoff forever.
+        self.outbox.enqueue(payload)
+        log("%s -> queued" % line)
+        self.flush(block=self.a.once)
 
+    def flush(self, block=False):
+        """Deliver whatever is due. Runs in a thread so a slow webhook never stalls the scan."""
+        url, key = load_env(self.home)
+        if not url or not key:
+            return
         def go():
-            code = post(url, key, payload)
-            log("%s -> %s" % (line, code if code else "FAILED after retries"))
-        if self.a.once:
+            if not self.flush_lock.acquire(False):
+                return
+            try:
+                delivered, left = self.outbox.flush(url, key, budget=20)
+                if delivered:
+                    log("delivered %d, %d still queued" % (delivered, left))
+            finally:
+                self.flush_lock.release()
+        if block:
             go()
         else:
-            threading.Thread(target=go, daemon=True).start()   # a slow webhook never stalls the scan
+            threading.Thread(target=go, daemon=True).start()
 
     def scan_decisions(self):
         """Hand each decision_requested to the webhook with its one-time nonce, then delete the outbox file."""
@@ -567,6 +584,8 @@ class Watcher(object):
             self.scan_stalls(busy or {})
         self.scan_decisions()
         self.scan_repings()
+        if not self.a.dry_run and self.outbox.depth():
+            self.flush(block=self.a.once)
         self.save()
 
 
@@ -688,6 +707,12 @@ def status(args, ctx):
             ps = subprocess.run(["ps", "-o", "%cpu=,rss=,etime=", "-p", pid], capture_output=True, text=True)
             print("process: cpu %%, rss KB, uptime = %s" % " ".join(ps.stdout.split()))
     print("webhook: %s, key %s" % (host, "set" if key else "MISSING"))
+    s = gc_outbox.Outbox(home).summary()
+    print("delivery: last success = %s, last error = %s%s" % (
+        s["last_success"] or "never", s["last_error"] or "none",
+        (" (at %s)" % s["last_error_at"]) if s["last_error"] else ""))
+    print("queue: %d undelivered%s" % (s["depth"], (", oldest = %s queued %ds ago, %d attempts" % (
+        s["oldest_event"], s["oldest_age_s"], s["oldest_attempts"])) if s["depth"] else ""))
     print("log: %s" % os.path.join(home, "watch.log"))
     return 0
 

@@ -92,7 +92,7 @@ flowchart LR
 
 The gate only gates work your assistant started. When the latest prompt in a chat was typed by you in Cursor, that chat's commands (medium **and** high risk) run without a hold or ping, until the next prompt. There is no time limit while the turn your prompt started is still running (long test runs included). After that turn ends (`stop`), the allow lasts 30 min in Away mode and 6 h in Present mode, and any new prompt decides again. Each one is logged as `human_turn_allow` in `~/.grok-cursor/events.jsonl`.
 
-How it tells: `grok-cursor send` drops `~/.grok-cursor/send-pending.json` just before it submits. The `beforeSubmitPrompt` hook consumes it (within 120 s) and marks that turn `grok`; any other prompt is `human`. The stop-hook resume message (`grok-cursor: decision ...`) also counts as `grok`. A chat with no recorded origin (for example from before this version) stays gated until you type in it.
+How it tells: `grok-cursor send` drops `~/.grok-cursor/send-pending.json` just before it submits. The `beforeSubmitPrompt` hook consumes it (within 120 s) and marks that turn `grok`; any other prompt is `human`. The stop-hook resume message (`grok-cursor: decision ...`) also counts as `grok`. A chat with no readable origin record (the hook missed the prompt, a chat from before this version) is treated like a human turn and logged as `prompt_origin_unknown`: only the catastrophic list is held. The gate only holds a turn it can prove came from `grok-cursor send` or its own resume message.
 
 Still held in a human-typed turn (logged `human_turn_held`, then gated as high):
 - `rm -r` of `/`, `~` or anything outside the workspace (`/tmp` is fine)

@@ -226,6 +226,12 @@ def synthetic_gate(hook_script):
         os.chmod(home, 0o700)
         with open(os.path.join(home, "mode"), "w", encoding="utf-8") as fh:
             fh.write("away\n")
+        try:                      # the probe models a turn grok-cursor sent; an unrecorded chat is allowed
+            import gc_gate
+            gc_gate.mark_send(home, "selftest")
+            gc_gate.note_prompt({"conversation_id": synthetic_payload()["conversation_id"], "prompt": "selftest"}, home)
+        except Exception:
+            pass
         env = dict(os.environ)
         env["GROK_CURSOR_HOME"] = home
         env.pop("CURSOR_VERSION", None)

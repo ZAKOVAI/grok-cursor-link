@@ -82,6 +82,17 @@ class GateBase(unittest.TestCase):
                     if not k.startswith(("GROK_CURSOR_", "GROK_BRIDGE_", "CURSOR_"))}
         self.env["HOME"] = self.home
         self.write_config(0.4)
+        # Gate tests model turns that grok-cursor sent: an unrecorded chat now defaults to allow
+        # (prompt_origin_unknown), so mark CID as grok-sent unless a test says otherwise.
+        self.grok_turn()
+
+    def grok_turn(self, cid=CID):
+        gc_gate.mark_send(self.gc, "grok sent this")
+        gc_gate.note_prompt({"conversation_id": cid, "prompt": "grok sent this"}, self.gc)
+        try:
+            os.remove(os.path.join(self.gc, "events.jsonl"))
+        except OSError:
+            pass
 
     def tearDown(self):
         shutil.rmtree(self.home, ignore_errors=True)
@@ -238,6 +249,7 @@ class HoldAndDecide(GateBase):
                 os.makedirs(self.gc)
                 self.write_mode("present")
                 self.write_config(0.35)
+                self.grok_turn()
                 body = self.hook("beforeShellExecution", shell(cmd), timeout=4)
                 self.assertEqual(body["permission"], "deny", body)
                 self.assertIn("waiting for the human on", body["user_message"])
@@ -531,10 +543,70 @@ class HumanTurn(GateBase):
         self.prompt("grok-cursor: decision abcd1234 allowed; re-run: npm test")
         self.assertEqual(self.hook("beforeShellExecution", shell(self.MEDIUM))["permission"], "deny")
 
-    def test_other_chat_unaffected_and_unknown_origin_gated(self):
-        self.write_mode("present")
-        self.prompt(cid="00000000-0000-4000-8000-0000000000bb")
-        self.assertEqual(self.hook("beforeShellExecution", shell(self.MEDIUM))["permission"], "deny")
+    def test_unknown_origin_allows_and_logs(self):
+        """No turn record (hook missed the prompt, chat from before an upgrade): never hold the human's work."""
+        for mode in ("present", "away"):
+            with self.subTest(mode=mode):
+                self.write_mode(mode)
+                shutil.rmtree(os.path.join(self.gc, "turns"), ignore_errors=True)
+                shutil.rmtree(os.path.join(self.gc, "decisions"), ignore_errors=True)
+                self.prompt(cid="00000000-0000-4000-8000-0000000000bb")      # some other chat only
+                self.assertEqual(self.hook("beforeShellExecution", shell(self.MEDIUM))["permission"], "allow")
+                self.assertEqual(self.hook("beforeShellExecution", shell(self.HIGH))["permission"], "allow")
+                self.assertIn("prompt_origin_unknown", self.kinds())
+                self.assertEqual(self.hook("beforeShellExecution", shell("git push -f origin main"))["permission"], "deny")
+
+    def test_replay_2026_10_16_1210_hold_of_typed_turn(self):
+        """Live case: Zach typed at 11:24:27 (turn file written under the pre-1.0.1 name), install.sh at 12:16
+        renamed turn files (hash suffix), the hook at 12:10 found no record for the chat -> decision_requested
+        816554a2 for `git diff --check && git add ...` in away mode. Must now allow."""
+        import time as _t
+        self.write_mode("away")
+        cid = "9654d0a7-88e8-46d4-b6d5-ce2b102f0357"
+        os.makedirs(os.path.join(self.gc, "turns"), exist_ok=True)
+        with open(gc_gate._legacy_turn_path(self.gc, cid), "w") as fh:         # exactly what was on disk
+            json.dump({"origin": "human", "via": "typed", "ts": _t.time() - 46 * 60}, fh)
+        cmd = "git diff --check && git add SiftUITests/LibraryUITests.swift docs/CHECKLIST.md && git commit -m x"
+        body = self.hook("beforeShellExecution", shell(cmd, cid=cid))
+        self.assertEqual(body["permission"], "allow", body)
+        self.assertIn("human_turn_allow", self.kinds())
+        self.assertNotIn("decision_requested", self.kinds())
+        # and with no record at all (the other way the hook could have lost it)
+        os.remove(gc_gate._legacy_turn_path(self.gc, cid))
+        body = self.hook("beforeShellExecution", shell(cmd, cid=cid))
+        self.assertEqual(body["permission"], "allow", body)
+        self.assertIn("prompt_origin_unknown", self.kinds())
+
+    def test_fifty_commands_over_thirty_minutes_never_held(self):
+        import time as _t
+        t0 = _t.time() - 40 * 60
+        for mode in ("present", "away"):
+            with self.subTest(mode=mode):
+                self.write_mode(mode)
+                gc_gate.note_prompt({"conversation_id": CID, "prompt": "ship it"}, self.gc, now=t0)
+                cmds = [self.MEDIUM, self.HIGH, "npm run deploy", "sudo ls", "git merge main", "rm -rf node_modules",
+                        "npx prisma migrate deploy", "git rebase main", "docker compose up -d", "vercel deploy --prod",
+                        "cat secrets.yaml", "git commit --amend --no-edit", "pip install x"] * 4
+                self.assertGreaterEqual(len(cmds), 50)
+                for i, cmd in enumerate(cmds):
+                    with self.subTest(i=i, cmd=cmd):
+                        self.assertEqual(self.hook("beforeShellExecution", shell(cmd))["permission"], "allow", cmd)
+                self.assertNotIn("decision_requested", self.kinds())
+                self.assertEqual(self.hook("beforeShellExecution", shell("git reset --hard origin/main"))["permission"], "deny")
+                shutil.rmtree(os.path.join(self.gc, "decisions"), ignore_errors=True)
+                os.remove(os.path.join(self.gc, "events.jsonl"))
+
+    def test_grok_sent_turn_keeps_normal_checks(self):
+        for mode in ("present", "away"):
+            with self.subTest(mode=mode):
+                self.write_mode(mode)
+                shutil.rmtree(os.path.join(self.gc, "decisions"), ignore_errors=True)
+                self.grok_send("deploy please")
+                self.assertEqual(self.hook("beforeShellExecution", shell(self.MEDIUM))["permission"], "deny")
+                self.assertEqual(self.hook("beforeShellExecution", shell(self.HIGH))["permission"], "deny")
+                self.assertEqual(self.hook("beforeShellExecution", shell("ls"))["permission"], "allow")
+                self.assertNotIn("prompt_origin_unknown", self.kinds())
+                self.assertNotIn("human_turn_allow", self.kinds())
 
     def test_marker_is_bound_to_its_prompt(self):
         """A human typing in another chat while a send is in flight must not steal the marker (audit G1)."""
@@ -597,12 +669,15 @@ class HumanTurn(GateBase):
         wrapped = "<timestamp>t</timestamp>\n<user_query>\ngrok-cursor: decision ab allowed; re-run: ls\n</user_query>"
         self.assertEqual(gc_gate.note_prompt({"conversation_id": CID, "prompt": wrapped}, self.gc), "grok")
 
-    def test_bad_turn_file_is_not_human(self):
+    def test_bad_turn_file_is_unknown_not_grok(self):
         for body in ("{", "[1]", '{"origin": "human", "ts": "x"}'):
             os.makedirs(os.path.join(self.gc, "turns"), exist_ok=True)
             with open(gc_gate._turn_path(self.gc, CID), "w") as fh:
                 fh.write(body)
             self.assertFalse(gc_gate.human_turn(self.gc, CID))
+            self.assertEqual(gc_gate.turn_origin(self.gc, CID), "unknown")
+        gc_gate.note_prompt({"conversation_id": CID, "prompt": "grok-cursor: decision x allowed; re-run: ls"}, self.gc)
+        self.assertEqual(gc_gate.turn_origin(self.gc, CID), "grok")
 
     def test_turn_paths_do_not_collide(self):
         self.assertNotEqual(gc_gate._turn_path(self.gc, "a/b"), gc_gate._turn_path(self.gc, "a_b"))

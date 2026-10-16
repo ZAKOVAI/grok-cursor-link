@@ -310,8 +310,10 @@ class Webhook(WatchBase):
         err = self.tick(w)
         self.assertEqual(got[0][0], "Bearer " + KEY)
         self.assertEqual(got[0][1]["snippet"], "all done")
-        self.assertIn("-> 200", err)
+        self.assertIn("-> queued", err)
+        self.assertIn("delivered 1, 0 still queued", err)
         self.assertNotIn(KEY, err)
+        self.assertEqual(w.outbox.depth(), 0)
 
     def test_retry_then_give_up_on_5xx(self):
         url, got = self.server(503)

@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.0.2 (2026-10-16): durable delivery, never hold a typed turn
+
+- Watcher delivery is durable: every ping is written to `~/.grok-cursor/queue/<event id>.json` before any network call and deleted only after a 2xx. Retries use exponential backoff with jitter (5 s doubling to 300 s). 400/408/425/429, 5xx and network errors are all retryable (the webhook reports its own rate limit as a 400). Same event id = same file, so nothing is duplicated. Nothing is ever dropped. `delivery.json` keeps last success / last error.
+- Local fallback: when nothing has been delivered for 2 minutes, each queued hold or finish raises one macOS notification (`osascript`), so the human still sees it with the webhook down. `GROK_CURSOR_NOTIFY=0` turns it off.
+- `grok-cursor watch status` shows the last success, the last error, queue depth, and the oldest undelivered event.
+- Gate: a chat with no readable turn record is treated as human-typed and logged `prompt_origin_unknown`; only the catastrophic list is held. The gate holds only turns it can prove came from `grok-cursor send` or its own resume message. The pre-1.0.1 turn-file name is read as a fallback, so an upgrade mid-turn keeps the human's turn.
+- Regression test replays the 12:10 ET 2026-10-16 case where a typed turn was held after an upgrade renamed the turn files.
+
 ## v1.0.0 (2026-10-16): one repo
 
 - Human-turn allow lasts for the whole running turn the human's prompt started (no time limit until `stop`); the 30 min Away / 6 h Present window only counts after `stop`.
