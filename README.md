@@ -4,6 +4,10 @@
 [![License](https://img.shields.io/github/license/ZAKOVAI/grok-cursor)](LICENSE)
 ![macOS](https://img.shields.io/badge/platform-macOS-black?logo=apple)
 
+## 🚀 Easiest way: use the ready-made Grok Bot
+
+Skip the manual setup. Import the **[Cursor Link bot](https://x.ai/bot/WNOHrJKWnT4kjoUTa5gPD)**. It walks you through everything, or does it for you: install, watcher, approvals, and keep-awake.
+
 **Give your Grok Bot eyes (and, if you want, hands) on your Cursor editor, no copy-paste.**
 
 - **Eyes (read-only):** your bot asks "what are you working on in Cursor?" and gets the answer from your Mac.
@@ -162,8 +166,6 @@ Still held in a human-typed turn (logged `human_turn_held`, then gated as high):
 - cloud/data destroy: `gh repo delete`, `terraform destroy`, `pulumi destroy`, `supabase db reset`, `railway down/delete`, `vercel remove/rm`, `fly apps destroy`, `aws s3 rb`, `dropdb`, `DROP DATABASE/TABLE`
 
 Self-protection (the agent can't read `~/.grok-cursor` or run `grok-cursor decide`, `send`, `mode` ...) applies in every turn.
-
-> **Using Grok Bot?** Skip the paste: import the ready-made [Cursor Link bot](https://x.ai/bot/WNOHrJKWnT4kjoUTa5gPD). Its first chat walks you through the install, the watcher, and keep-awake.
 
 ## The bot instruction block
 

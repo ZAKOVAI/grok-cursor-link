@@ -633,7 +633,7 @@ class HumanTurn(GateBase):
                 self.assertEqual(self.hook("beforeShellExecution", shell("git push -f origin main"))["permission"], "deny")
 
     def test_replay_2026_10_16_1210_hold_of_typed_turn(self):
-        """Live case: Zach typed at 11:24:27 (turn file written under the pre-1.0.1 name), install.sh at 12:16
+        """Live case: the user typed at 11:24:27 (turn file written under the pre-1.0.1 name), install.sh at 12:16
         renamed turn files (hash suffix), the hook at 12:10 found no record for the chat -> decision_requested
         816554a2 for `git diff --check && git add ...` in away mode. Must now allow."""
         import time as _t

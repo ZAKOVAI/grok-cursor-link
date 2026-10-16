@@ -74,7 +74,7 @@ grok-cursor awake lid setup|verify|remove
   - `awake_start{duration|until, lid}`
   - `awake_stop`
   - `awake_auto{enabled, idle_min, lid}`
-  - Lid on battery requires Zach's explicit yes per session unless he opts into "always".
+  - Lid on battery requires the user's explicit yes per session unless they opt into "always".
 - Optional menu-bar app (SwiftUI `MenuBarExtra`): mirrors §1. It is a thin client over the CLI/daemon socket, and the daemon owns all state.
 - "When done": default = release only. Opt-in `pmset sleepnow`. No shutdown.
 
