@@ -4,6 +4,7 @@
 
 - `approve` counts only cards with a live Run/Allow/Skip/Accept button; finished edit rows and plan cards no longer trigger "N approval cards; refusing to guess".
 - `config.json` `dev_roots`: file edits inside a listed checkout of this project may mention the data dir or the hooks file in their content. Writes into the data dir, the hooks file, shell commands and the catastrophic list are unchanged.
+- Catastrophic `rm` check follows a leading `cd` instead of discarding the cwd, and a relative non-recursive `rm` of one named file is never catastrophic (held in-repo edit + temp-file cleanup, decision 64ac0b45).
 - VERSION 1.0.3 in the CLI and the hook.
 - Verified on Cursor 3.25.6: doctor OK, selftest exit 0 (hooks, gate, CDP, selectors).
 

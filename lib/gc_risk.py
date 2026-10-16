@@ -225,12 +225,12 @@ def catastrophic(command, cwd=""):
         for m in _SUBST_SH.finditer(cmd):
             if not _safe_host(m.group(1)):
                 return "curl | sh from unknown host"
-    moved = False
+    here = cwd
     for seg in _segments(raw):
         if seg and seg[0] in ("cd", "pushd"):
-            moved = True
+            here = _after_cd(seg, here)       # follow the cd; unknown target = unknown cwd
             continue
-        why = _rm_catastrophic(seg, "" if moved else cwd)
+        why = _rm_catastrophic(seg, here)
         if why:
             return why
         for i, t in enumerate(seg):          # `sh -c '...'`: look inside the quoted body
@@ -239,6 +239,20 @@ def catastrophic(command, cwd=""):
                 if why:
                     return why
     return ""
+
+def _after_cd(seg, cwd):
+    """The directory after `cd X`: absolute or ~-relative targets are known, anything else only if cwd is."""
+    target = next((a for a in seg[1:] if not a.startswith("-")), "")
+    if not target or target.startswith("$"):
+        return ""
+    target = re.sub(r"^\$\{?HOME\}?", os.path.expanduser("~"), target)
+    target = os.path.expanduser(target)
+    if os.path.isabs(target):
+        out = os.path.normpath(target)
+    else:
+        out = os.path.normpath(os.path.join(cwd, target)) if cwd else ""
+    home = os.path.expanduser("~")
+    return "" if out in ("/", home) or home.startswith(out + "/") else out   # ~ or above is no workspace
 
 def _rm_catastrophic(seg, cwd):
     idx = [i for i, t in enumerate(seg) if t == "rm" or t.endswith("/rm")]
@@ -267,6 +281,9 @@ def _rm_catastrophic(seg, cwd):
         path = os.path.realpath(path)          # macOS: /tmp -> /private/tmp, like `root`
         if recursive and raw.rstrip("/") in (".", "./*", "*"):
             return "rm -r of the workspace"
+        if not recursive and not os.path.isabs(t) and ".." not in raw.split("/") and "*" not in raw \
+                and root != home and (not root or not home.startswith(root + "/")):
+            continue                           # one named file under cwd (not ~ or /): never catastrophic
         if root and (path == root or ".." in raw.split("/")):
             return "rm -r outside workspace" if recursive else "rm outside workspace"
         if path.startswith(TMP_DIRS) or path.startswith("/var/folders/"):

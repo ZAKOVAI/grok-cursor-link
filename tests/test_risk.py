@@ -159,6 +159,29 @@ class Catastrophic(unittest.TestCase):
             with self.subTest(cmd=cmd):
                 self.assertEqual(gc_risk.catastrophic(cmd, WORKSPACE), "", cmd)
 
+    def test_regression_64ac0b45_in_repo_heredoc_with_temp_cleanup(self):
+        """Held 2026-10-16 13:37 as 'rm outside workspace': Cursor sent cwd='' and the leading `cd` blanked
+        it again, so a relative `rm tests/test_cards.py.new` had no root. Must never be catastrophic."""
+        with open(os.path.join(os.path.dirname(__file__), "fixtures", "cmd-64ac0b45.sh"), encoding="utf-8") as fh:
+            cmd = fh.read()
+        self.assertIn("rm tests/test_cards.py.new", cmd)
+        for cwd in ("", "/tmp/proj", os.path.expanduser("~/gc-test/grok-cursor")):
+            with self.subTest(cwd=cwd):
+                self.assertEqual(gc_risk.catastrophic(cmd, cwd), "")
+        self.assertEqual(gc_risk.tag(cmd, "")[0], "high", "still gated when the turn is not the human's")
+
+    def test_cd_is_followed_and_relative_file_rm_is_fine(self):
+        self.assertEqual(gc_risk.catastrophic("rm build.log", ""), "")
+        self.assertEqual(gc_risk.catastrophic("rm tests/x.new; rm ./y.tmp", ""), "")
+        self.assertEqual(gc_risk.catastrophic("cd ~/src/app && rm -rf node_modules", ""), "")
+        self.assertEqual(gc_risk.catastrophic("cd /tmp/proj && rm -rf build", ""), "")
+        self.assertTrue(gc_risk.catastrophic("rm -rf build", ""), "recursive with unknown cwd stays held")
+        self.assertTrue(gc_risk.catastrophic("cd ~ && rm -rf Documents", "/tmp/proj"))
+        self.assertTrue(gc_risk.catastrophic("cd $X && rm -rf build", "/tmp/proj"), "unknown cd target")
+        self.assertTrue(gc_risk.catastrophic("rm ../other.txt", ""))
+        self.assertTrue(gc_risk.catastrophic("rm ~/Documents/x.txt", ""))
+        self.assertTrue(gc_risk.catastrophic("rm *.txt", ""), "glob stays held without a root")
+
     def test_rm_inside_workspace_is_fine_outside_is_not(self):
         self.assertEqual(gc_risk.catastrophic("rm -rf build", WORKSPACE), "")
         self.assertEqual(gc_risk.catastrophic("rm old.log", WORKSPACE), "")
