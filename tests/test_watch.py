@@ -569,5 +569,39 @@ class Repings(WatchBase):
             self.assertEqual(json.load(fh)["repings"][rid]["n"], 2)
         self.assertEqual(oct(os.stat(os.path.join(self.home, "watch-state.json")).st_mode & 0o777), "0o600")
 
+
+class AwakeAuto(WatchBase):
+    def test_generating_until_the_turn_finishes(self):
+        w = self.watcher()
+        self.tick(w)
+        self.write(C1, user("fix the bug") + bot("looking"))
+        self.tick(w)
+        self.assertIn(C1, w.chats_generating({}))
+        self.write(C1, bot("done") + ended())
+        self.tick(w)
+        self.assertNotIn(C1, w.chats_generating({}))
+
+    def test_busy_composer_counts(self):
+        w = self.watcher()
+        self.tick(w)
+        self.assertEqual(w.chats_generating({C1: {"status": "generating"}}), {C1})
+
+    def test_tick_syncs_only_when_auto_is_on(self):
+        import gc_awake
+        seen = []
+        real = gc_awake.auto_sync
+        gc_awake.auto_sync = lambda *a, **k: seen.append(k.get("generating", a[2] if len(a) > 2 else None)) or ""
+        try:
+            w = self.watcher()
+            self.tick(w)
+            self.assertEqual(seen, [])
+            gc_awake._write(self.home, gc_awake.AUTO, {"enabled": True, "idle_seconds": 600})
+            self.write(C1, user("keep going"))
+            self.tick(w)
+            self.assertEqual(seen, [True])
+        finally:
+            gc_awake.auto_sync = real
+
+
 if __name__ == "__main__":
     unittest.main()

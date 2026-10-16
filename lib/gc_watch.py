@@ -364,6 +364,7 @@ class Watcher(object):
                         "end": pos, "status": str(obj.get("status") or ""), "error": err[:300]}
                 elif obj.get("role") in ("user", "assistant"):
                     st["pending"] = None             # a new turn started: not done yet
+                    st["in_turn"] = True
             st["offset"] += cut
             self.dirty = True
         p = st.get("pending")
@@ -373,6 +374,9 @@ class Watcher(object):
             self.finished(path, slug, cid, p)
 
     def finished(self, path, slug, cid, p):
+        if path in self.offsets:
+            self.offsets[path]["in_turn"] = False    # the chat has finished; idle clock may start
+            self.dirty = True
         name, workspace = self.chat_info(cid, slug)
         if not self.a.include_scratch and is_scratch(slug, workspace):
             return
@@ -586,7 +590,28 @@ class Watcher(object):
         self.scan_repings()
         if not self.a.dry_run and self.outbox.depth():
             self.flush(block=self.a.once)
+        self.sync_awake(busy if isinstance(busy, dict) else {})
         self.save()
+
+    def chats_generating(self, busy):
+        """Chat ids still generating: a busy composer, or a transcript turn not yet finished."""
+        ids = set(busy or [])
+        for path, pair in self.files.items():
+            if (self.offsets.get(path) or {}).get("in_turn"):
+                ids.add(pair[1])
+        return ids
+
+    def sync_awake(self, busy):
+        """Auto mode only. Holds caffeinate while any watched chat is generating."""
+        try:
+            import gc_awake
+            if not (gc_awake._read(self.home, gc_awake.AUTO) or {}).get("enabled"):
+                return
+            cli = os.path.realpath(sys.argv[0])
+            gc_awake.auto_sync(self.home, gc_awake.Power(), bool(self.chats_generating(busy)),
+                               launch=gc_awake.launch_daemon(cli))
+        except Exception as exc:
+            log("awake sync failed: %s" % type(exc).__name__)
 
 
 def run(args, ctx):

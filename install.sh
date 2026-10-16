@@ -87,6 +87,7 @@ cp "$SRC_DIR/lib/gc_gate.py" "$GC_HOME/bin/gc_gate.py"
 cp "$SRC_DIR/lib/gc_card_events.py" "$GC_HOME/bin/gc_card_events.py"
 cp "$SRC_DIR/lib/gc_resilience.py" "$GC_HOME/bin/gc_resilience.py"
 cp "$SRC_DIR/lib/gc_outbox.py" "$GC_HOME/bin/gc_outbox.py"
+cp "$SRC_DIR/lib/gc_awake.py" "$GC_HOME/bin/gc_awake.py"
 cp "$SRC_DIR/uninstall.sh" "$GC_HOME/bin/uninstall.sh"
 mkdir -p "$GC_HOME/docs"
 cp "$SRC_DIR/docs/PROBES.md" "$GC_HOME/docs/PROBES.md"   # gc_gate reads hold + resume facts from here

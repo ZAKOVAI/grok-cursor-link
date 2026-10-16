@@ -946,7 +946,8 @@ def build_parser():
     sp.set_defaults(func=cmd_watch)
 
     sp = sub.add_parser("awake", help="keep the Mac awake while agents work (docs/KEEP_AWAKE_SPEC.md)")
-    sp.add_argument("action", choices=("on", "off", "extend", "status", "auto", "lid", "daemon"))
+    sp.add_argument("action", nargs="?", default="status",
+                    help="on|off|stop|extend|status|auto|lid|daemon, or a duration like 2m")
     sp.add_argument("duration", nargs="?", help="on: 15m|30m|1h|2h|4h|8h|inf; extend: 30m; auto: on|off; lid: setup|verify|remove")
     sp.add_argument("--until", metavar="HH:MM", help="on: keep awake until this clock time")
     sp.add_argument("--lid", action="store_true", help="also keep going with the lid closed (needs `awake lid setup`)")

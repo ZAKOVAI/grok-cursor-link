@@ -1,9 +1,9 @@
 """gc_awake: keep the Mac awake while Cursor agents work. Python 3 stdlib. Spec: docs/KEEP_AWAKE_SPEC.md.
 
 State lives in <home>/awake.json (the session) and <home>/awake-lid.json (lid-sleep ownership flag).
-A session is a small daemon (`grok-cursor awake daemon`) that holds `caffeinate -i [-d] -w <its pid>`,
-so the power assertion dies with the daemon. Every 30 s the daemon runs `tick()`, a pure function
-over (state, power readings, now) that decides whether the session ends and why.
+A session is a small daemon (`grok-cursor awake daemon`) that owns `caffeinate -dimsu -w <its pid>`
+as a child. The daemon kills that child on stop, expiry, and exit; `-w` also drops it if the daemon
+dies. Every 30 s the daemon runs `tick()`, a pure function over (state, power readings, now).
 Power reads and pmset writes go through a Power object so tests inject fakes and never touch pmset or sudo.
 """
 import datetime
@@ -14,6 +14,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 STATE = "awake.json"
@@ -71,6 +72,43 @@ def fmt_remaining(seconds):
     h, rem = divmod(seconds, 3600)
     m = rem // 60
     return ("%dh%02dm" % (h, m)) if h else ("%dm" % m if m else "%ds" % seconds)
+
+def fmt_span(seconds):
+    """Human span for Pat: '1h 59m', '1m 59s', '10m', '45s'."""
+    if seconds is None:
+        return "indefinitely"
+    seconds = max(0, int(seconds))
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return ("%dh %dm" % (h, m)) if m else ("%dh" % h)
+    if m:
+        return ("%dm %ds" % (m, s)) if s else ("%dm" % m)
+    return "%ds" % s
+
+def caffeinate_argv(pid, display_sleep=False):
+    """`-dimsu` keeps display, idle, disk, and system from sleeping and declares the user active.
+    `-w` exits caffeinate when the daemon pid dies, so a crash cannot leave an orphan.
+    `--display-sleep` drops `-d` and lets the screen sleep."""
+    flags = "-imsu" if display_sleep else "-dimsu"
+    return ["caffeinate", flags, "-w", str(int(pid))]
+
+def session_line(st, now=None):
+    """One plain line: 'Awake for 1h 59m (manual), caffeinate pid 1234'."""
+    now = time.time() if now is None else now
+    mode = st.get("mode") or "manual"
+    pid = st.get("holder_pid") or st.get("caffeinate_pid")
+    pid_bit = ", caffeinate pid %s" % pid if pid else ""
+    if st.get("end") is None:
+        return "Awake indefinitely (%s)%s" % (mode, pid_bit)
+    return "Awake for %s (%s)%s" % (fmt_span(float(st["end"]) - now), mode, pid_bit)
+
+def say(args, line, code=0, **fields):
+    if getattr(args, "json", False):
+        print(json.dumps(dict(fields, line=line), sort_keys=True))
+    else:
+        print(line)
+    return code
 
 # ---------------------------------------------------------------- files
 
@@ -212,19 +250,29 @@ class Power(object):
         return p.returncode == 0, (p.stderr or "").strip()[:200]
 
     def spawn_holder(self, pid, display_sleep):
-        """caffeinate tied to `pid`: the assertion dies with the daemon. Returns the holder pid."""
-        argv = ["caffeinate", "-i"] + ([] if display_sleep else ["-d"]) + ["-w", str(pid)]
+        """caffeinate as a child of the daemon. Returns the holder pid, or None."""
         try:
-            return subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                    stderr=subprocess.DEVNULL, start_new_session=True).pid
+            return subprocess.Popen(caffeinate_argv(pid, display_sleep), stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                    start_new_session=True).pid
         except OSError:
             return None
 
     def kill(self, pid):
+        """SIGTERM, then SIGKILL if it is still alive. Never raises."""
         try:
-            os.kill(int(pid), signal.SIGTERM)
+            pid = int(pid)
+            os.kill(pid, signal.SIGTERM)
         except (OSError, TypeError, ValueError):
-            pass
+            return
+        deadline = time.time() + 1.5
+        while time.time() < deadline and pid_alive(pid):
+            time.sleep(0.05)
+        if pid_alive(pid):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
 
     def alive(self, pid):
         return pid_alive(pid)
@@ -327,8 +375,12 @@ def start(home, power, duration=None, until=None, lid=False, display_sleep=False
     _write(home, STATE, st)
     pid = launch(home) if launch else None
     if pid:
-        st["pid"] = pid
-        _write(home, STATE, st)
+        cur = load_state(home) or {}
+        if cur.get("holder_ready"):
+            st = cur                      # the daemon already published its caffeinate pid
+        else:
+            st["pid"] = pid
+            _write(home, STATE, st)
     _log(home, "awake_started", mode=mode, duration=st["duration"] or "inf", lid=st["lid"],
          until=datetime.datetime.fromtimestamp(end).isoformat(timespec="minutes") if end else "")
     return st, "started"
@@ -375,7 +427,8 @@ def status(home, power, now=None):
     if st and live:
         out.update(mode=st.get("mode"), started=st.get("started"), end=st.get("end"),
                    remaining=fmt_remaining(None if st.get("end") is None else float(st["end"]) - now),
-                   display_sleep=st.get("display_sleep"), pid=st.get("pid"))
+                   display_sleep=st.get("display_sleep"), pid=st.get("pid"),
+                   caffeinate_pid=st.get("holder_pid"))
     elif st:
         out["stale"] = True
     last = _read(home, LAST)
@@ -392,9 +445,19 @@ class Daemon(object):
     def __init__(self, home, power, sleep=time.sleep, clock=time.time):
         self.home, self.power, self.sleep, self.clock = home, power, sleep, clock
         self.stop_reason = None
+        self.holder_pid = None
+        self.wake = threading.Event()
 
     def _signal(self, signum, _frame):
         self.stop_reason = "quit"
+        self.wake.set()
+
+    def _pause(self):
+        if self.sleep is time.sleep:
+            self.wake.wait(TICK_SECONDS)          # a signal sets the event and returns at once
+            self.wake.clear()
+        else:
+            self.sleep(TICK_SECONDS)
 
     def run(self, max_ticks=None):
         st = load_state(self.home)
@@ -402,6 +465,8 @@ class Daemon(object):
             return 2
         st["pid"] = os.getpid()
         st["holder_pid"] = self.power.spawn_holder(os.getpid(), st.get("display_sleep"))
+        st["holder_ready"] = True
+        self.holder_pid = st["holder_pid"]
         _write(self.home, STATE, st)
         for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
             try:
@@ -430,12 +495,63 @@ class Daemon(object):
             ticks += 1
             if max_ticks is not None and ticks >= max_ticks:
                 return 0
-            self.sleep(TICK_SECONDS)
+            self._pause()
         if reason != "manual" or load_state(self.home):
             stop(self.home, self.power, reason)
-            if reason in ("battery", "thermal", "cap", "lid_failed"):
+            if reason in ("battery", "thermal", "cap", "lid_failed", "auto_idle"):
                 _notify("grok-cursor awake", "session ended: %s" % reason)
+        elif self.holder_pid:
+            self.power.kill(self.holder_pid)      # session file already gone: still drop caffeinate
         return 0
+
+def await_holder(home, timeout=None):
+    """Block until the daemon has published its caffeinate pid. Returns the session, or the last read."""
+    if timeout is None:
+        try:
+            timeout = float(os.environ.get("GROK_CURSOR_AWAKE_HOLDER_WAIT", "5"))
+        except ValueError:
+            timeout = 5.0
+    deadline = time.time() + timeout
+    st = load_state(home)
+    while st and not st.get("holder_ready") and time.time() < deadline:
+        time.sleep(0.05)
+        st = load_state(home)
+    return st
+
+def auto_sync(home, power, generating, now=None, launch=None):
+    """Hold an auto session while any watched chat is generating. Release idle_seconds after the last
+    one finishes. A live manual session is never started over or stopped. `awake off` suppresses auto
+    until the current generation ends, so the watcher cannot restart it on the next tick."""
+    now = time.time() if now is None else now
+    cfg = _read(home, AUTO) or {}
+    if not cfg.get("enabled"):
+        return ""
+    if _read(home, AUTO_SUPPRESS):
+        if not generating:
+            _remove(home, AUTO_SUPPRESS)
+        return "suppressed"
+    st = load_state(home)
+    live = bool(st and power.alive(st.get("pid")))
+    if live and st.get("mode") == "manual":
+        return "manual"
+    if generating:
+        cfg["last_busy"] = now
+        _write(home, AUTO, cfg)
+        if not (live and st.get("mode") == "auto"):
+            start(home, power, mode="auto", launch=launch, now=now)
+        return "held"
+    if not (live and st.get("mode") == "auto"):
+        return ""
+    last = cfg.get("last_busy")
+    if last is None:
+        cfg["last_busy"] = now
+        _write(home, AUTO, cfg)
+        return "idle"
+    idle = float(cfg.get("idle_seconds") or 600)
+    if now - float(last) >= idle:
+        stop(home, power, "auto_idle", now=now)
+        return "released"
+    return "idle"
 
 def launch_daemon(cli):
     """Start `grok-cursor awake daemon` detached. Returns its pid."""
@@ -448,35 +564,42 @@ def launch_daemon(cli):
 
 # ---------------------------------------------------------------- CLI
 
+def _normalize_action(args):
+    """`awake 2m` is `awake on 2m`. `awake stop` is `awake off`. Bare `awake` is status."""
+    action = getattr(args, "action", None) or "status"
+    if action == "stop":
+        action = "off"
+    elif action not in ("on", "off", "extend", "status", "auto", "lid", "daemon"):
+        args.duration = action
+        action = "on"
+    args.action = action
+    return action
+
+def _off_line(out):
+    auto = out.get("auto") or {}
+    if auto.get("enabled"):
+        return "Awake off. Auto on, release %s after the last chat finishes" % fmt_span(auto.get("idle_seconds") or 600)
+    return "Awake off"
+
 def cmd_awake(args, ctx, power=None, launch=None):
     home = ctx["data_home"]()
     power = power or ctx.get("power") or Power()
     launch = launch or ctx.get("launch") or launch_daemon(ctx.get("cli") or os.path.realpath(sys.argv[0]))
-    action = args.action
+    action = _normalize_action(args)
     if action == "daemon":
         return Daemon(home, power).run()
     if action == "status":
         out = status(home, power)
-        if getattr(args, "json", False):
-            print(json.dumps(out, indent=2))
-            return 0
-        if out["active"]:
-            print("awake: on (%s, %s remaining%s)" % (out["mode"], out["remaining"],
-                                                      ", display may sleep" if out.get("display_sleep") else ""))
-        else:
-            print("awake: off (Mac follows normal energy rules)")
-        print("lid: " + out["lid"])
-        if out.get("last_end"):
-            print("last session ended: %s" % out["last_end"].get("reason"))
-        if out.get("auto"):
-            print("auto: %s" % ("on (idle %s)" % fmt_remaining(out["auto"].get("idle_seconds")) if out["auto"].get("enabled") else "off"))
-        return 0
+        st = load_state(home)
+        line = session_line(st) if out["active"] and st else _off_line(out)
+        return say(args, line, active=out["active"], mode=out.get("mode"),
+                   caffeinate_pid=out.get("caffeinate_pid"), remaining=out.get("remaining"),
+                   auto=bool((out.get("auto") or {}).get("enabled")))
     if action == "off":
         if (_read(home, AUTO) or {}).get("enabled"):
-            _write(home, AUTO_SUPPRESS, {"ts": time.time()})     # manual off wins until the next new task
-        if not stop(home, power, "manual"):
-            print("awake: already off")
-        return 0
+            _write(home, AUTO_SUPPRESS, {"ts": time.time()})     # manual off wins until generation ends
+        stop(home, power, "manual")
+        return say(args, "Awake off", active=False)
     if action == "extend":
         try:
             mins = parse_duration(args.duration or "30m") // 60
@@ -487,8 +610,7 @@ def cmd_awake(args, ctx, power=None, launch=None):
         if not st:
             sys.stderr.write("awake extend: no session running\n")
             return 1
-        print("awake: extended, %s remaining" % fmt_remaining(float(st["end"]) - time.time()))
-        return 0
+        return say(args, session_line(st), active=True, mode=st.get("mode"), caffeinate_pid=st.get("holder_pid"))
     if action == "on":
         until = None
         if getattr(args, "until", None):
@@ -504,14 +626,17 @@ def cmd_awake(args, ctx, power=None, launch=None):
             except ValueError as exc:
                 sys.stderr.write("awake on: %s\n" % exc)
                 return 2
-        st, note = start(home, power, duration=duration, until=until, lid=bool(getattr(args, "lid", False)),
-                         display_sleep=bool(getattr(args, "display_sleep", False)), launch=launch)
+        st, _note = start(home, power, duration=duration, until=until, lid=bool(getattr(args, "lid", False)),
+                          display_sleep=bool(getattr(args, "display_sleep", False)), launch=launch)
         if st is None:
-            print("awake: " + note)
-            return 0
-        print("awake: on (%s remaining)%s" % (fmt_remaining(None if st["end"] is None else float(st["end"]) - time.time()),
-                                              ("; lid: " + st["lid_error"]) if st.get("lid_error") else (", lid sleep disabled" if st["lid"] else "")))
-        return 0 if not st.get("lid_error") else 3
+            return say(args, "Awake off", active=False)
+        if launch:
+            st = await_holder(home) or st
+        line = session_line(st)
+        if st.get("lid_error"):
+            line += " (lid: %s)" % st["lid_error"]
+        return say(args, line, 0 if not st.get("lid_error") else 3, active=True, mode=st.get("mode"),
+                   caffeinate_pid=st.get("holder_pid"))
     if action == "auto":
         return cmd_auto(args, home)
     if action == "lid":
@@ -530,12 +655,12 @@ def cmd_auto(args, home):
             return 2
         _write(home, AUTO, {"enabled": True, "idle_seconds": idle, "lid": bool(getattr(args, "lid", False))})
         _remove(home, AUTO_SUPPRESS)
-        print("awake auto: on (release after %s idle%s)" % (fmt_remaining(idle), ", lid" if getattr(args, "lid", False) else ""))
-        return 0
+        return say(args, "Auto on, release %s after the last chat finishes" % fmt_span(idle), auto=True, idle_seconds=idle)
     if sub == "off":
         _write(home, AUTO, {"enabled": False})
-        print("awake auto: off")
-        return 0
+        return say(args, "Auto off", auto=False)
     a = _read(home, AUTO) or {}
-    print("awake auto: %s" % ("on" if a.get("enabled") else "off"))
-    return 0
+    on = bool(a.get("enabled"))
+    if on:
+        return say(args, "Auto on, release %s after the last chat finishes" % fmt_span(a.get("idle_seconds") or 600), auto=True)
+    return say(args, "Auto off", auto=False)
