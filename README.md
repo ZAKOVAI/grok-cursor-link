@@ -7,7 +7,7 @@
 Check on your Cursor agents from your phone. Your Grok Bot can see what each chat is doing, tell you when one finishes or needs you, send it the next prompt, and keep your Mac awake while it works.
 
 <p align="center">
-  <img src="docs/img/chat-demo.svg" width="420" alt="Animated example: asking the Cursor Link bot to keep the Mac awake until an agent finishes, then approving a push">
+  <img src="docs/img/chat-demo.svg" width="420" alt="Animated example: asking the Cursor Link bot to keep the Mac awake until an agent finishes, then approving a git push">
   <br><sub>Example conversation</sub>
 </p>
 
@@ -53,12 +53,12 @@ Auto mode keeps your Mac awake while any watched chat is working, and lets it sl
 ### Check on your agents
 
 - "What's my agent doing right now?"
-- "Check on my Syftr chat"
+- "How's the checkout-api agent doing?"
 - "Anything waiting on me?"
 
 ### Send work
 
-- "Tell the Syftr chat to run the tests"
+- "Tell the checkout-api agent to run the tests"
 
 Your bot shows you the message and which chat it's going to, and sends it once you say yes.
 
