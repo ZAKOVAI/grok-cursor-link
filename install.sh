@@ -1,5 +1,5 @@
 #!/bin/sh
-# install.sh: install grok-cursor-link for the current user.
+# install.sh: install grok-cursor for the current user.
 #   * copies the hook, CLI and MCP server into ~/.grok-cursor/bin (+ skill)
 #   * merges 5 entries into ~/.cursor/hooks.json (backs up the original,
 #     keeps every other hook, safe to run again)
@@ -101,7 +101,9 @@ python3 "$SRC_DIR/lib/merge_hooks.py" install "$HOOKS_FILE" "$GC_HOME/bin/grok-c
 # The watcher keeps the python it started with. Restart a loaded job so this
 # install's modules are the ones running. The plist is not rewritten, so
 # dry-run and scratch flags stay.
-LABEL="${GROK_CURSOR_WATCH_LABEL:-com.grok-cursor.watch}"
+# Same order as lib/gc_watch.py resolve_label: env, then $GC_HOME/watch-label, then the default.
+LABEL="${GROK_CURSOR_WATCH_LABEL:-$(tr -d '[:space:]' < "$GC_HOME/watch-label" 2>/dev/null || true)}"
+case "$LABEL" in ''|*[!A-Za-z0-9._-]*) LABEL=com.grok-cursor.watch ;; esac
 DOMAIN="gui/$(id -u)"
 PLIST="${GROK_CURSOR_LAUNCH_AGENTS:-$HOME/Library/LaunchAgents}/$LABEL.plist"
 PLIST_HOME=$(plutil -extract EnvironmentVariables.GROK_CURSOR_HOME raw -o - "$PLIST" 2>/dev/null || true)

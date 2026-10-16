@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end tests for grok-cursor-link. Standard library only.
+"""End-to-end tests for grok-cursor. Standard library only.
 
 Every test runs against a throwaway HOME, so nothing touches real Cursor
 config. Run:  python3 -m unittest discover -s tests -v   (or tests/run.sh)

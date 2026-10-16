@@ -1,4 +1,4 @@
-# grok-cursor-link
+# grok-cursor
 
 **Give your Grok Bot eyes (and, if you want, hands) on your Cursor editor, no copy-paste.**
 
@@ -286,7 +286,7 @@ Cursor (`~/.cursor/mcp.json`) or Claude Desktop (`~/Library/Application Support/
   "mcpServers": {
     "grok-cursor": {
       "command": "python3",
-      "args": ["/Users/YOU/.grok-cursor/bin/grok-cursor-mcp"]
+      "args": ["<HOME>/.grok-cursor/bin/grok-cursor-mcp"]
     }
   }
 }

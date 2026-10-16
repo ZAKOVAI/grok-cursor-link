@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.0 (2026-10-16): one repo
+
+- This repo is the single source of truth (the old private development repo is archived).
+- Watch label: `$GROK_CURSOR_WATCH_LABEL`, then `~/.grok-cursor/watch-label`, then `com.grok-cursor.watch`; install, uninstall and `watch` agree, so a reinstall never starts a second watcher.
+- Audit W2: watch-state.json forgets request ids whose decision and outbox files are gone.
+- Audit W3: `GROK_CURSOR_REPING_NONCE=0` drops the nonce from re-pings (default keeps it so a webhook that only sees a re-ping can still decide).
+- Audit W4: plist uses `KeepAlive: {SuccessfulExit: false}`, and a missing/invalid webhook config waits 300 s before exiting, so no 10 s respawn loop.
+- Audit I3: `tests/run.sh` always runs `sh -n`; `SHELLCHECK=require` fails when shellcheck is missing; `tests/test_lint.py`.
+- Audit P1: README MCP snippet no longer shows a macOS-only path.
+
 ## v0.4.0 (unreleased): resilience
 
 - Version tripwire stores known-version and emits cursor_updated.

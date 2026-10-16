@@ -1,14 +1,14 @@
 # Refresh the installed CLI
 
-The copy outside this repo does not update when you pull. Phase B live tests used `./bin/grok-cursor` because that outside copy had no `answer` or `plan`.
-
-From this repo, after pulling:
+The installed copy in `~/.grok-cursor` does not update when you pull. Keep one checkout of github.com/ZAKOVAI/grok-cursor and install from it. From that checkout, after pulling:
 
     ./install.sh
 
 That copies the CLI, the hook, and the python modules (including the card-event and resilience modules), then merges hook entries. It is safe to run again. It does not change run mode.
 
 A watcher that is already loaded keeps the python it started with, so `./install.sh` restarts a loaded job in place (`launchctl kickstart -k`). The plist is not rewritten, so its flags (dry run, scratch) stay. Do not run `watch install` just to pick up new modules: that rewrites the flags.
+
+The watcher's launchd label is `com.grok-cursor.watch` unless `$GROK_CURSOR_WATCH_LABEL` or `~/.grok-cursor/watch-label` names another one. Keep that file if your install predates the default, so a reinstall restarts your existing job instead of starting a second watcher. Check with `launchctl list | grep grok-cursor`: there should be exactly one.
 
 `./install.sh` is the update step. There is no separate updater.
 

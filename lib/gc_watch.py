@@ -29,7 +29,26 @@ import gc_events
 import gc_send
 from gc_send import SendAbort
 
-LABEL = os.environ.get("GROK_CURSOR_WATCH_LABEL") or "com.grok-cursor.watch"
+DEFAULT_LABEL = "com.grok-cursor.watch"
+_LABEL_RX = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+def resolve_label(home=None):
+    """launchd label: $GROK_CURSOR_WATCH_LABEL, else <GROK_CURSOR_HOME>/watch-label, else the default.
+    Lets an existing install keep its own label so a reinstall never starts a second watcher."""
+    for cand in (os.environ.get("GROK_CURSOR_WATCH_LABEL"),):
+        if cand and _LABEL_RX.match(cand.strip()):
+            return cand.strip()
+    home = home or os.environ.get("GROK_CURSOR_HOME") or os.path.expanduser("~/.grok-cursor")
+    try:
+        with open(os.path.join(home, "watch-label"), encoding="utf-8") as fh:
+            cand = fh.read().strip()
+        if _LABEL_RX.match(cand):
+            return cand
+    except OSError:
+        pass
+    return DEFAULT_LABEL
+
+LABEL = resolve_label()
 # Re-POST an undecided decision_requested at most len(REPING_BACKOFF) times:
 # 60 s after the first ping, then 120 s, then 300 s. Stops early once the
 # request is decided, expired (gate TTL) or gone. State survives restarts.
@@ -256,10 +275,21 @@ class Watcher(object):
         tmp = self.state_path + ".tmp"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            self.prune_posted()
             json.dump({"files": self.offsets, "cards": self.cards, "posted": sorted(self.posted), "stalls": self.stalls,
                        "repings": self.repings, "card_fails": self.card_fails}, fh)
         os.replace(tmp, self.state_path)
         self.dirty = False
+
+    def prune_posted(self):
+        """Forget req_ids whose decision and outbox files are both gone (audit W2). Without the outbox
+        nonce scan_decisions can never re-post them, so dropping the id is safe. Other keys stay."""
+        for key in list(self.posted):
+            if ":" in key or key in self.repings:
+                continue
+            if not os.path.exists(os.path.join(self.home, "decisions", key + ".json")) \
+                    and not os.path.exists(os.path.join(self.home, "outbox", key)):
+                self.posted.discard(key)
 
     def chat_info(self, cid, slug):
         if cid not in self.names and time.time() - self.names_at > 30:
@@ -503,6 +533,9 @@ class Watcher(object):
                 log("reping %s stopped: cap %d reached" % (req_id, len(REPING_BACKOFF)))
                 continue
             payload = dict(r.get("payload") or {}, repeat=n + 1, timestamp=now_iso())
+            if os.environ.get("GROK_CURSOR_REPING_NONCE", "1") == "0":     # audit W3, opt-in
+                payload.pop("nonce", None)
+                payload["reply"] = "grok-cursor decide %s <nonce from the first ping> allow|deny" % req_id
             self.emit(payload)
             log("reping %s %d/%d" % (req_id, n + 1, len(REPING_BACKOFF)))
             n += 1
@@ -537,6 +570,8 @@ def run(args, ctx):
         if not url_ok(url) or not key:
             sys.stderr.write("grok-cursor watch: set GROK_CURSOR_WATCH_URL (https) and GROK_CURSOR_WATCH_KEY in %s, "
                              "or use --dry-run\n" % os.path.join(ctx["data_home"](), "watch.env"))
+            if not getattr(args, "once", False):         # audit W4: no 10 s respawn loop on a bad config
+                time.sleep(_f("GROK_CURSOR_WATCH_CONFIG_BACKOFF", 300.0))
             return 2
     w = Watcher(args, ctx)
     log("watching %s%s%s" % (os.path.join(w.cursor, "projects"), " (dry run)" if args.dry_run else "",
@@ -568,7 +603,7 @@ def plist_bytes(args, ctx):
     argv += ["--include-scratch"] if args.include_scratch else []
     argv += ["--cdp", str(args.cdp)] if args.cdp else []
     logf = os.path.join(ctx["data_home"](), "watch.log")
-    return plistlib.dumps({"Label": LABEL, "ProgramArguments": argv, "RunAtLoad": True, "KeepAlive": True,
+    return plistlib.dumps({"Label": LABEL, "ProgramArguments": argv, "RunAtLoad": True, "KeepAlive": {"SuccessfulExit": False},
                            "ThrottleInterval": 10, "ProcessType": "Background", "LowPriorityIO": True,
                            "Nice": 10, "StandardOutPath": logf, "StandardErrorPath": logf,
                            "EnvironmentVariables": {"GROK_CURSOR_HOME": ctx["data_home"](),

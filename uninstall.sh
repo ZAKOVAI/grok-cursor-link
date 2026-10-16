@@ -1,5 +1,5 @@
 #!/bin/sh
-# uninstall.sh: remove grok-cursor-link.
+# uninstall.sh: remove grok-cursor.
 #   * removes ONLY grok-cursor entries from ~/.cursor/hooks.json (backup first)
 #   * removes ~/.grok-cursor/bin, skills and docs (sends.log is data)
 #   * keeps recorded chats unless --purge is given
@@ -40,7 +40,9 @@ else
   echo "no $HOOKS_FILE; nothing to unregister"
 fi
 
-LABEL="${GROK_CURSOR_WATCH_LABEL:-com.grok-cursor.watch}"
+# Same order as lib/gc_watch.py resolve_label: env, then $GC_HOME/watch-label, then the default.
+LABEL="${GROK_CURSOR_WATCH_LABEL:-$(tr -d '[:space:]' < "$GC_HOME/watch-label" 2>/dev/null || true)}"
+case "$LABEL" in ''|*[!A-Za-z0-9._-]*) LABEL=com.grok-cursor.watch ;; esac
 PLIST="${GROK_CURSOR_LAUNCH_AGENTS:-$HOME/Library/LaunchAgents}/$LABEL.plist"
 # Only the job that points at this GC_HOME. Running uninstall against a temp
 # GROK_CURSOR_HOME (tests, audits) must leave the real watcher alone.

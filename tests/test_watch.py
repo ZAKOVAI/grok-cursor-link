@@ -352,7 +352,8 @@ class Launchd(WatchBase):
         pl = plistlib.loads(gc_watch.plist_bytes(args, ctx))
         self.assertEqual(pl["Label"], "com.grok-cursor.watch")
         self.assertEqual(pl["ProgramArguments"][1:], ["/x/grok-cursor", "watch", "run", "--dry-run"])
-        self.assertTrue(pl["KeepAlive"] and pl["RunAtLoad"])
+        self.assertEqual(pl["KeepAlive"], {"SuccessfulExit": False})
+        self.assertTrue(pl["RunAtLoad"])
         self.assertEqual(pl["StandardErrorPath"], os.path.join(self.home, "watch.log"))
         self.assertNotIn("KEY", json.dumps(pl["EnvironmentVariables"]), "the key stays in watch.env")
         env = {k: v for k, v in os.environ.items() if not k.startswith("GROK_CURSOR_WATCH")}
@@ -360,6 +361,55 @@ class Launchd(WatchBase):
         p = subprocess.run([PY, CLI, "watch", "install"], capture_output=True, text=True, env=env)
         self.assertEqual(p.returncode, 2)
         self.assertFalse(os.path.exists(os.path.join(self.tmp, "la")), "nothing installed without a webhook")
+
+
+class Hardening(WatchBase):
+    """Audit W2 (posted pruning), W3 (opt-in nonce-less re-pings), W4 (config-error backoff), label resolution."""
+
+    def test_label_resolution(self):
+        old = os.environ.pop("GROK_CURSOR_WATCH_LABEL", None)
+        try:
+            self.assertEqual(gc_watch.resolve_label(self.home), "com.grok-cursor.watch")
+            os.makedirs(self.home, exist_ok=True)
+            with open(os.path.join(self.home, "watch-label"), "w") as fh:
+                fh.write("com.example.my-watch\n")
+            self.assertEqual(gc_watch.resolve_label(self.home), "com.example.my-watch")
+            with open(os.path.join(self.home, "watch-label"), "w") as fh:
+                fh.write("bad label; rm -rf /")
+            self.assertEqual(gc_watch.resolve_label(self.home), "com.grok-cursor.watch")
+            os.environ["GROK_CURSOR_WATCH_LABEL"] = "com.env.label"
+            self.assertEqual(gc_watch.resolve_label(self.home), "com.env.label")
+        finally:
+            os.environ.pop("GROK_CURSOR_WATCH_LABEL", None)
+            if old is not None:
+                os.environ["GROK_CURSOR_WATCH_LABEL"] = old
+
+    def test_posted_pruned_when_files_gone(self):
+        w = self.watcher()
+        os.makedirs(os.path.join(self.home, "decisions"), exist_ok=True)
+        open(os.path.join(self.home, "decisions", "live1.json"), "w").write("{}")
+        w.posted |= {"gone1", "live1", "updated:1.0:2.0"}
+        w.dirty = True
+        w.save()
+        with open(os.path.join(self.home, "watch-state.json"), encoding="utf-8") as fh:
+            posted = json.load(fh)["posted"]
+        self.assertNotIn("gone1", posted)
+        self.assertIn("live1", posted)
+        self.assertIn("updated:1.0:2.0", posted, "non-request keys are kept")
+
+    def test_config_error_waits_before_exit(self):
+        import time as _t
+        os.environ["GROK_CURSOR_WATCH_CONFIG_BACKOFF"] = "0.3"
+        try:
+            args = argparse.Namespace(dry_run=False, once=False)
+            ctx = {"data_home": lambda: self.home}
+            t0 = _t.time()
+            with redirect_stderr(io.StringIO()):
+                rc = gc_watch.run(args, ctx)
+            self.assertEqual(rc, 2)
+            self.assertGreaterEqual(_t.time() - t0, 0.3)
+        finally:
+            os.environ.pop("GROK_CURSOR_WATCH_CONFIG_BACKOFF", None)
 
 
 class Decisions(WatchBase):
@@ -383,7 +433,10 @@ class Decisions(WatchBase):
         self.assertEqual(len(self.pings), 1)
         with open(os.path.join(self.home, "watch-state.json"), encoding="utf-8") as fh:
             saved = json.load(fh)
-        self.assertIn("r1", saved["posted"])
+        self.assertNotIn("r1", saved["posted"], "no decision or outbox file left: pruned (audit W2)")
+        w2 = self.watcher()
+        w2.tick(cdp=False)
+        self.assertEqual(len(self.pings), 1, "a pruned id is never re-posted (its nonce is gone)")
 
 
 class Repings(WatchBase):
@@ -439,6 +492,19 @@ class Repings(WatchBase):
             self.at(w, t)
         self.assertEqual(self.count(rid), 4)
         self.assertNotIn(rid, w.repings)
+
+    def test_reping_without_nonce_when_opted_in(self):
+        os.environ["GROK_CURSOR_REPING_NONCE"] = "0"
+        try:
+            rid, nonce = self.request()
+            w = self.make()
+            self.at(w, 0)
+            self.assertEqual(self.pings[-1]["nonce"], nonce, "first ping always carries it")
+            self.at(w, 60)
+            self.assertNotIn("nonce", self.pings[-1])
+            self.assertNotIn(nonce, json.dumps(self.pings[-1]))
+        finally:
+            os.environ.pop("GROK_CURSOR_REPING_NONCE", None)
 
     def test_new_req_ids_are_never_suppressed(self):
         w = self.make()
