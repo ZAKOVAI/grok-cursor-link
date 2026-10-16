@@ -1,6 +1,6 @@
 # Refresh the installed CLI
 
-The installed copy in `~/.grok-cursor` does not update when you pull. Keep one checkout of github.com/ZAKOVAI/grok-cursor and install from it. From that checkout, after pulling:
+The installed copy in `~/.grok-cursor` does not update when you pull. Keep one checkout of github.com/ZAKOVAI/grok-cursor-link and install from it. From that checkout, after pulling:
 
     ./install.sh
 

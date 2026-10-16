@@ -1,7 +1,7 @@
 # grok-cursor
 
-[![Release](https://img.shields.io/github/v/release/ZAKOVAI/grok-cursor)](https://github.com/ZAKOVAI/grok-cursor/releases)
-[![License](https://img.shields.io/github/license/ZAKOVAI/grok-cursor)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/ZAKOVAI/grok-cursor-link)](https://github.com/ZAKOVAI/grok-cursor-link/releases)
+[![License](https://img.shields.io/github/license/ZAKOVAI/grok-cursor-link)](LICENSE)
 ![macOS](https://img.shields.io/badge/platform-macOS-black?logo=apple)
 
 ## 🚀 Easiest way: use the ready-made Grok Bot
@@ -75,7 +75,7 @@ A push, a release, or a deploy happens only after you explicitly say yes.
 1. **Clone**
 
    ```sh
-   git clone https://github.com/ZAKOVAI/grok-cursor.git && cd grok-cursor
+   git clone https://github.com/ZAKOVAI/grok-cursor-link.git && cd grok-cursor
    ```
 
 2. **Install**
