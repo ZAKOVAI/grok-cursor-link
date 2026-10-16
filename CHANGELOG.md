@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.1.1 (2026-10-16)
+
+- `--version` reports 1.1.1 from the VERSION file. The CLI and the hook both read that file.
+- README: "What you can say to your bot", plus `awake` in the command list and the bot instruction block.
+
 ## v1.0.4 (2026-10-16)
 
 - `~/.cursor` is read-only: reads (beforeReadFile, Read/Grep/Glob/ListDir) under it are allowed, but Write/Delete and the hooks config file stay blocked. The data dir stays fully protected.

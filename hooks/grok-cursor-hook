@@ -31,7 +31,20 @@ import sys
 import tempfile
 import time
 
-VERSION = "1.0.4"
+def _product_version():
+    """The VERSION file is the only copy of the release number."""
+    here = os.path.dirname(os.path.realpath(__file__))
+    for rel in ("VERSION", os.path.join("..", "VERSION")):
+        try:
+            with open(os.path.join(here, rel), encoding="utf-8") as fh:
+                text = fh.read().strip()
+        except OSError:
+            continue
+        if text:
+            return text.split()[0]
+    return "unknown"
+
+VERSION = _product_version()
 
 # Responses Cursor documents for each hook. beforeSubmitPrompt must allow
 # the prompt through; everything else gets an empty object (no-op).

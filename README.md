@@ -8,6 +8,45 @@
 
 Your Grok Bot asks "what are you working on in Cursor?" and gets the answer from your Mac in one command. It sees the active chat, the project, whether the agent is still working, and the last few turns. You don't have to export or paste transcripts.
 
+## What you can say to your bot
+
+No slash commands. Say it in a normal sentence. Your bot runs the command on your Mac.
+
+### Keep your Mac awake
+
+- "keep my Mac awake 2h"
+- "keep my Mac awake until 11pm"
+- "add 30 more minutes"
+- "is my Mac awake?"
+- "let it sleep"
+- "auto on" or "auto off"
+
+Auto keeps the Mac awake while any watched chat is generating, and lets it sleep 10 minutes after the last one finishes. A time you asked for wins over auto. This does not need a password or an admin prompt.
+
+### Check on chats
+
+- "check <chat name>"
+- "what is running?"
+- "what is waiting on me?"
+
+### Send work
+
+- "send this to <chat>: ..."
+
+The bot shows you the message and which chat it will go to, and sends it after you say yes.
+
+### Approvals
+
+The bot handles read-only checks and local work you have already approved. Anything risky comes back to you as allow or deny. Say "approve it" or "deny it".
+
+### Shipping
+
+A push, a release, or a deploy happens only after you explicitly say yes.
+
+### Watcher health
+
+- "is the watcher OK?"
+
 ## Quick start (60 seconds)
 
 1. **Clone**
@@ -130,6 +169,19 @@ On a watcher event:
 - chat_stalled: tell me. Do not click anything.
 
 Only `decide` is on the Auto-review Custom Rule (Grok Bot Settings > General > Auto-review > Custom Rules, "Allow automatically"). That rule is AI-judged. The CLI nonce and the exact shape are the real boundary. `approve` and `answer` still need the human's per-command approval unless he adds a second rule.
+Keep the Mac awake (no sudo). Durations such as 15m, 2h, 4h, or inf:
+    ~/.grok-cursor/bin/grok-cursor awake 2h
+    ~/.grok-cursor/bin/grok-cursor awake --until 23:00
+    ~/.grok-cursor/bin/grok-cursor awake extend 30m
+    ~/.grok-cursor/bin/grok-cursor awake status
+    ~/.grok-cursor/bin/grok-cursor awake stop
+    ~/.grok-cursor/bin/grok-cursor awake auto on
+    ~/.grok-cursor/bin/grok-cursor awake auto off
+Add --json to any of these for one machine-readable line.
+Auto holds awake while any watched chat is generating and releases 10 minutes after the last one finishes. It never overrides a time you set yourself.
+
+On first use, or when the user asks what you can do, send them the What you can say list from the README in plain English.
+
 Never click a button whose label starts with Always. Never edit files under ~/.grok-cursor or ~/.cursor.
 ```
 
@@ -150,6 +202,7 @@ It works with any assistant that can run shell commands on your machine, not jus
 | `grok-cursor pending --to CHAT [--json]` | Show the approval card a chat is waiting on (CDP, read-only) |
 | `grok-cursor approve --to CHAT --action run\|skip\|accept [--expect TEXT] [--back] [--dry-run]` | Click one button on that card; never "Always …" ([details](#approval-cards-pending--approve)) |
 | `grok-cursor ax-dump [--grep RX]` | Print Cursor's accessibility tree (to tune selectors) |
+| `grok-cursor awake [15m\|2h\|4h\|inf \| --until 23:00] [--json]` | Keep the Mac awake. Also `extend 30m`, `status`, `stop`, and `auto on` / `auto off`. `--json` prints one machine-readable line. No sudo. Auto holds while any watched chat is generating and releases 10 minutes after the last one finishes. |
 
 Notes:
 

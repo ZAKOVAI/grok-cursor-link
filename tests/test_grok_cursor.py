@@ -742,5 +742,18 @@ class InstallUninstall(Base):
         self.assertIn("old grok-bridge", out)
 
 
+
+class ProductVersion(unittest.TestCase):
+    def test_version_flag_matches_the_version_file(self):
+        ver = open(os.path.join(ROOT, "VERSION"), encoding="utf-8").read().strip()
+        self.assertEqual(ver, "1.1.1")
+        proc = subprocess.run([PY, CLI, "--version"], capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "grok-cursor " + ver)
+        import importlib.machinery
+        mod = importlib.machinery.SourceFileLoader("gc_hook_ver", HOOK).load_module()
+        self.assertEqual(mod.VERSION, ver)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
