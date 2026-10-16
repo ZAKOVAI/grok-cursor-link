@@ -350,7 +350,7 @@ class Launchd(WatchBase):
         args = argparse.Namespace(dry_run=True, include_scratch=False, cdp=None)
         ctx = {"data_home": lambda: self.home, "cli": "/x/grok-cursor"}
         pl = plistlib.loads(gc_watch.plist_bytes(args, ctx))
-        self.assertEqual(pl["Label"], "com.grok-cursor.watch")
+        self.assertEqual(pl["Label"], gc_watch.LABEL)   # resolved at import; default covered in Hardening
         self.assertEqual(pl["ProgramArguments"][1:], ["/x/grok-cursor", "watch", "run", "--dry-run"])
         self.assertEqual(pl["KeepAlive"], {"SuccessfulExit": False})
         self.assertTrue(pl["RunAtLoad"])
